@@ -293,6 +293,7 @@ public class PropertyDerivations
 
             ActualProperties translated = properties.translateVariable(variable -> node.getGroupingKeys().contains(variable) ? Optional.of(variable) : Optional.empty());
 
+            // 继承上游节点的partitioning方式，但LocalProperties强制为AggregationNode的GroupingProperty。
             return ActualProperties.builderFrom(translated)
                     .local(LocalProperties.grouped(node.getGroupingKeys()))
                     .build();
@@ -415,6 +416,7 @@ public class PropertyDerivations
                                 .build();
                     }
 
+                    // 可以看到，这种情况下JoinNode会保留probe side的partitioning属性。
                     return ActualProperties.builderFrom(probeProperties)
                             .constants(constants)
                             .unordered(unordered)
@@ -623,12 +625,21 @@ public class PropertyDerivations
                     builder.global(coordinatorSingleStreamPartition());
                 }
                 else if (inputProperties.stream().anyMatch(ActualProperties::isSingleNode)) {
+                    // [BUG] 这里看起来是BUG，应该采用singleStreamPartition？？
                     builder.global(coordinatorSingleStreamPartition());
                 }
 
                 return builder.build();
             }
 
+            /**
+             * node.getOrderingScheme()定义的情况下，对于remote ExchangeNode而言，SortingProperty总是能保证的。但目前看起来，
+             * 仅仅当GATHER的情况，才会在{@link AddExchanges}中用到。
+             *
+             * 参考：
+             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#visitRemoteSource}
+             * {@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#visitSort}
+             */
             switch (node.getType()) {
                 case GATHER:
                     boolean coordinatorOnly = node.getPartitioningScheme().getPartitioning().getHandle().isCoordinatorOnly();
@@ -766,6 +777,10 @@ public class PropertyDerivations
 
             // Globally constant assignments
             Map<ColumnHandle, ConstantExpression> globalConstants = new HashMap<>();
+
+            /**
+             * node.getCurrentConstraint()主要来自下推的谓词，参考{@link AddExchanges.Rewriter#visitFilter}。
+             */
             extractFixedValuesToConstantExpressions(node.getCurrentConstraint()).orElse(ImmutableMap.of())
                     .entrySet().stream()
                     .filter(entry -> !entry.getValue().isNull())
@@ -789,6 +804,12 @@ public class PropertyDerivations
             return properties.build();
         }
 
+        /**
+         * [question] 下面的逻辑感觉执行不到，因为RemoteSourceNode是在对plan进行fragmenting的时候，才引入的。
+         * 从那以后，应该不会再用得到ActualProperties。
+         *
+         * 参考{@link com.facebook.presto.sql.planner.BasePlanFragmenter#visitExchange}
+         */
         @Override
         public ActualProperties visitRemoteSource(RemoteSourceNode node, List<ActualProperties> inputProperties)
         {
@@ -820,6 +841,7 @@ public class PropertyDerivations
                         .addAll(constants.keySet())
                         .build();
                 if (assignmentsAndConstants.containsAll(tablePartitioning.getPartitioningColumns())) {
+                    // [question] 这里的table partitioning column为啥不优先使用constants？？？
                     List<RowExpression> arguments = tablePartitioning.getPartitioningColumns().stream()
                             .map(column -> assignments.containsKey(column) ? assignments.get(column) : constants.get(column))
                             .collect(toImmutableList());

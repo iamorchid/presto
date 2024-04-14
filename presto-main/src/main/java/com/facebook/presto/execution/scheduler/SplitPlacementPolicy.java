@@ -26,4 +26,6 @@ public interface SplitPlacementPolicy
     void lockDownNodes();
 
     List<InternalNode> getActiveNodes();
+
+    InternalNode getNodeForBucket(int bucketId);
 }

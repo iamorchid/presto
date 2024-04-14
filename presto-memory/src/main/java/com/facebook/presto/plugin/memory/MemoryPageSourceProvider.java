@@ -26,6 +26,7 @@ import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import javax.inject.Inject;
 
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -50,20 +51,14 @@ public final class MemoryPageSourceProvider
             SplitContext splitContext)
     {
         MemorySplit memorySplit = (MemorySplit) split;
-        long tableId = memorySplit.getTableHandle().getTableId();
-        int partNumber = memorySplit.getPartNumber();
-        int totalParts = memorySplit.getTotalPartsPerWorker();
-        long expectedRows = memorySplit.getExpectedRows();
-
-        List<Integer> columnIndexes = columns.stream()
-                .map(MemoryColumnHandle.class::cast)
-                .map(MemoryColumnHandle::getColumnIndex).collect(toList());
+        List<Integer> columnIndexes = IntStream.range(0, columns.size()).boxed().collect(toList());
         List<Page> pages = pagesStore.getPages(
-                tableId,
-                partNumber,
-                totalParts,
+                memorySplit.getTableHandle().getTableId(),
+                memorySplit.getBucket(),
+                memorySplit.getPartNumber(),
+                memorySplit.getTotalPartsPerWorker(),
                 columnIndexes,
-                expectedRows);
+                memorySplit.getExpectedRows());
 
         return new FixedPageSource(pages);
     }

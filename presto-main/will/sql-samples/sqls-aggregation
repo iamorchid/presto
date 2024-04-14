@@ -1,0 +1,230 @@
+
+测试：使用tpch (table支持orderkey partitioning)
+
+
+select clerk, sum(totalprice) as cnt from orders group by clerk;
+
+                                                                                                                   Query Plan                                                                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, cnt] => [clerk:varchar(15), sum:double]                                                                                                                                                                                         
+         cnt := sum (1:23)                                                                                                                                                                                                                       
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar(15), sum:double]                                                                                                                                                                        
+         - Project[projectLocality = LOCAL] => [clerk:varchar(15), sum:double]                                                                                                                                                                   
+             - Aggregate(FINAL)[clerk][$hashvalue] => [clerk:varchar(15), $hashvalue:bigint, sum:double]                                                                                                                                         
+                     sum := "presto.default.sum"((sum_9)) (1:23)    
+                 /*** 虽然RemoteStreamingExchange保证了来自多个上游task的相同clerk的记录只被一个下游task消费，但下游消费时会通过多个Driver并发处理。 ***/
+                 /*** 这里通过LocalExchange保证相同clerk的结果被一个Driver进行处理。 ***/                                                                                                                                                                               
+                 - LocalExchange[HASH][$hashvalue] (clerk) => [clerk:varchar(15), sum_9:double, $hashvalue:bigint]                                                                                                                               
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_10] => [clerk:varchar(15), sum_9:double, $hashvalue_10:bigint]                                                                                                            
+                         - Aggregate(PARTIAL)[clerk][$hashvalue_11] => [clerk:varchar(15), $hashvalue_11:bigint, sum_9:double]                                                                                                                   
+                                 sum_9 := "presto.default.sum"((totalprice)) (1:23)                                                                                                                                                              
+                             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [totalprice:double, clerk:varchar(15), $hashvalue_11:bigint] 
+                                     Estimates: {rows: 15000 (424.80kB), cpu: 435000.00, memory: 0.00, network: 0.00}/{rows: 15000 (424.80kB), cpu: 1005000.00, memory: 0.00, network: 0.00}                                                     
+                                     $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (1:67)                                                                                                            
+                                     totalprice := tpch:totalprice (1:51)                                                                                                                                                                        
+                                     clerk := tpch:clerk (1:51)                                                                                                                                                                                  
+                                     tpch:orderstatus                                                                                                                                                                                            
+                                         :: [["F"], ["O"], ["P"]]                                                                                                                                                                                
+                                                                                                                                                                                                                                                 
+(1 row)
+
+
+set session enforce_fixed_distribution_for_output_operator = true;
+select clerk, sum(totalprice) as cnt from orders group by clerk;
+
+                                                                                                                     Query Plan                                                                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, cnt] => [clerk:varchar(15), sum:double]                                                                                                                                                                                             
+         cnt := sum (1:23)                                                                                                                                                                                                                           
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar(15), sum:double]                                                                                                                                                                            
+         - Project[projectLocality = LOCAL] => [clerk:varchar(15), sum:double]                                                                                                                                                                       
+             - Aggregate(FINAL)[clerk][$hashvalue] => [clerk:varchar(15), $hashvalue:bigint, sum:double]                                                                                                                                             
+                     sum := "presto.default.sum"((sum_9)) (1:23)                                                                                                                                                                                     
+                 - LocalExchange[HASH][$hashvalue] (clerk) => [clerk:varchar(15), sum_9:double, $hashvalue:bigint]                                                                                                                                   
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_10] => [clerk:varchar(15), sum_9:double, $hashvalue_10:bigint]                                                                                                                
+                         - LocalExchange[ROUND_ROBIN] () => [clerk:varchar(15), sum_9:double, $hashvalue_11:bigint]                                                                                                                                  
+                             - Aggregate(PARTIAL)[clerk][$hashvalue_12] => [clerk:varchar(15), $hashvalue_12:bigint, sum_9:double]                                                                                                                   
+                                     sum_9 := "presto.default.sum"((totalprice)) (1:23)                                                                                                                                                              
+                                 - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [totalprice:double, clerk:varchar(15), $hashvalue_12:bigint] 
+                                         Estimates: {rows: 15000 (424.80kB), cpu: 435000.00, memory: 0.00, network: 0.00}/{rows: 15000 (424.80kB), cpu: 1005000.00, memory: 0.00, network: 0.00}                                                     
+                                         $hashvalue_12 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (1:67)                                                                                                            
+                                         totalprice := tpch:totalprice (1:51)                                                                                                                                                                        
+                                         clerk := tpch:clerk (1:51)                                                                                                                                                                                  
+                                         tpch:orderstatus                                                                                                                                                                                            
+                                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                                
+                                                                                                                                                                                                                                                     
+(1 row)
+
+
+
+select orderkey, sum(totalprice) as cnt from orders group by orderkey;
+
+                                                                              Query Plan                                                                              
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, cnt] => [orderkey:bigint, sum:double]                                                                                                             
+         Estimates: {rows: 15000 (263.67kB), cpu: 540000.00, memory: 270000.00, network: 270000.00}                                                                   
+         cnt := sum (1:26)                                                                                                                                            
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, sum:double]                                                                                               
+             Estimates: {rows: 15000 (263.67kB), cpu: 540000.00, memory: 270000.00, network: 270000.00}                                                               
+         - Aggregate(STREAMING)[orderkey] => [orderkey:bigint, sum:double]                                                                                            
+                 Estimates: {rows: 15000 (263.67kB), cpu: 540000.00, memory: 270000.00, network: 0.00}                                                                
+                 sum := "presto.default.sum"((totalprice)) (1:26)                                                                                                     
+             - TableScan[TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}] => [orderkey:bigint, totalprice:double] 
+                     Estimates: {rows: 15000 (263.67kB), cpu: 270000.00, memory: 0.00, network: 0.00}                                                                 
+                     totalprice := tpch:totalprice (1:54)                                                                                                             
+                     orderkey := tpch:orderkey (1:54)                                                                                                                 
+                     tpch:orderstatus                                                                                                                                 
+                         :: [["F"], ["O"], ["P"]]                                                                                                                     
+                                                                                                                                                                      
+(1 row)
+
+
+
+
+select clerk, orderdate, orderkey, count(*) as cnt from orders group by clerk, orderdate, orderkey;
+
+select clerk, orderdate, orderkey, sum(totalprice) as cnt from orders group by clerk, orderdate, orderkey;
+
+1) 
+explain 
+select clerk, sum(cnt) as total from 
+  (select clerk, orderdate, orderkey, count(*) as cnt from orders group by clerk, orderdate, orderkey) o
+group by clerk;
+
+                                                                                                                                    Query Plan                                                                                                                           
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, total] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                                               
+         total := sum (2:15)                                                                                                                                                                                                                                             
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                                
+         - Project[projectLocality = LOCAL] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                           
+             - Aggregate(FINAL)[clerk][$hashvalue] => [clerk:varchar(15), $hashvalue:bigint, sum:bigint]                                                                                                                                                                 
+                     sum := "presto.default.sum"((sum_28)) (2:15)                                                                                                                                                                                                        
+                 - LocalExchange[HASH][$hashvalue] (clerk) => [clerk:varchar(15), sum_28:bigint, $hashvalue:bigint]                                                                                                                                                      
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_29] => [clerk:varchar(15), sum_28:bigint, $hashvalue_29:bigint]                                                                                                                                   
+                         - Aggregate(PARTIAL)[clerk][$hashvalue_31] => [clerk:varchar(15), $hashvalue_31:bigint, sum_28:bigint]                                                                                                                                          
+                                 sum_28 := "presto.default.sum"((count)) (2:15)                                                                                                                                                                                          
+                             - Project[projectLocality = LOCAL] => [clerk:varchar(15), count:bigint, $hashvalue_31:bigint]                                                                                                                                               
+                                     Estimates: {rows: 15000 (424.80kB), cpu: 2370000.00, memory: 780000.00, network: 0.00}                                                                                                                                              
+                                     $hashvalue_31 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (3:11)                                                                                                                                    
+                                 - Aggregate[clerk, orderdate, orderkey][$hashvalue_30] => [clerk:varchar(15), orderdate:date, orderkey:bigint, $hashvalue_30:bigint, count:bigint]                                                                                      
+                                         Estimates: {rows: 15000 (424.80kB), cpu: 1800000.00, memory: 780000.00, network: 0.00}                                                                                                                                          
+                                         count := "presto.default.count"(*) (3:39)                                                                                                                                                                                       
+                                     - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, clerk:varchar(15), $hashvalue_30:bigint]   
+                                             Estimates: {rows: 15000 (424.80kB), cpu: 510000.00, memory: 0.00, network: 0.00}/{rows: 15000 (424.80kB), cpu: 1155000.00, memory: 0.00, network: 0.00}                                                                     
+                                             $hashvalue_30 := combine_hash(combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')), COALESCE($operator$hash_code(orderdate), BIGINT'0')), COALESCE($operator$hash_code(orderkey), BIGINT'0'
+                                             clerk := tpch:clerk (3:60)                                                                                                                                                                                                  
+                                             orderdate := tpch:orderdate (3:60)                                                                                                                                                                                          
+                                             orderkey := tpch:orderkey (3:60)                                                                                                                                                                                            
+                                             tpch:orderstatus                                                                                                                                                                                                            
+                                                 :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+
+2)
+
+explain 
+select orderkey, sum(cnt) as total from 
+  (select clerk, orderdate, orderkey, count(*) as cnt from orders group by clerk, orderdate, orderkey) o
+group by orderkey;
+
+                                                                                                                           Query Plan                                                                                                                            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, total] => [orderkey:bigint, sum:bigint]                                                                                                                                                                                                      
+         Estimates: {rows: 15000 (263.67kB), cpu: 2340000.00, memory: 1050000.00, network: 270000.00}                                                                                                                                                            
+         total := sum (1:26)                                                                                                                                                                                                                                     
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, sum:bigint]                                                                                                                                                                                          
+             Estimates: {rows: 15000 (263.67kB), cpu: 2340000.00, memory: 1050000.00, network: 270000.00}                                                                                                                                                        
+         - Aggregate[orderkey] => [orderkey:bigint, sum:bigint]                                                                                                                                                                                                  
+                 Estimates: {rows: 15000 (263.67kB), cpu: 2340000.00, memory: 1050000.00, network: 0.00}                                                                                                                                                         
+                 sum := "presto.default.sum"((count)) (1:26)                                                                                                                                                                                                     
+             - Project[projectLocality = LOCAL] => [orderkey:bigint, count:bigint]                                                                                                                                                                               
+                     Estimates: {rows: 15000 (263.67kB), cpu: 2070000.00, memory: 780000.00, network: 0.00}                                                                                                                                                      
+                 - Aggregate[clerk, orderdate, orderkey][$hashvalue] => [clerk:varchar(15), orderdate:date, orderkey:bigint, $hashvalue:bigint, count:bigint]                                                                                                    
+                         Estimates: {rows: 15000 (263.67kB), cpu: 1800000.00, memory: 780000.00, network: 0.00}                                                                                                                                                  
+                         count := "presto.default.count"(*) (1:85)                                                                                                                                                                                               
+                     - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, clerk:varchar(15), $hashvalue:bigint]              
+                             Estimates: {rows: 15000 (263.67kB), cpu: 510000.00, memory: 0.00, network: 0.00}/{rows: 15000 (263.67kB), cpu: 1155000.00, memory: 0.00, network: 0.00}                                                                             
+                             $hashvalue := combine_hash(combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')), COALESCE($operator$hash_code(orderdate), BIGINT'0')), COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:122) 
+                             clerk := tpch:clerk (1:106)                                                                                                                                                                                                         
+                             orderdate := tpch:orderdate (1:106)                                                                                                                                                                                                 
+                             orderkey := tpch:orderkey (1:106)                                                                                                                                                                                                   
+                             tpch:orderstatus                                                                                                                                                                                                                    
+                                 :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                        
+                                                                                                                                                                                                                                                                 
+(1 row)
+
+
+3) 
+explain 
+select clerk, sum(cnt) as total from 
+  (select clerk, orderdate, count(*) as cnt from orders group by clerk, orderdate) o
+group by clerk;
+
+                                                                                                                            Query Plan                                                                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, total] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                                        
+         total := sum (2:15)                                                                                                                                                                                                                                      
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                         
+         - Project[projectLocality = LOCAL] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                    
+             - Aggregate(FINAL)[clerk][$hashvalue] => [clerk:varchar(15), $hashvalue:bigint, sum:bigint]                                                                                                                                                          
+                     sum := "presto.default.sum"((sum_23)) (2:15)                                                                                                                                                                                                 
+                 - LocalExchange[HASH][$hashvalue] (clerk) => [clerk:varchar(15), sum_23:bigint, $hashvalue:bigint]                                                                                                                                               
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_25] => [clerk:varchar(15), sum_23:bigint, $hashvalue_25:bigint]                                                                                                                            
+                         - Aggregate(PARTIAL)[clerk][$hashvalue_29] => [clerk:varchar(15), $hashvalue_29:bigint, sum_23:bigint]                                                                                                                                   
+                                 sum_23 := "presto.default.sum"((count)) (2:15)                                                                                                                                                                                   
+                             - Project[projectLocality = LOCAL] => [clerk:varchar(15), count:bigint, $hashvalue_29:bigint]                                                                                                                                        
+                                     $hashvalue_29 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (3:11)                                                                                                                             
+                                 - Aggregate(FINAL)[clerk, orderdate][$hashvalue_26] => [clerk:varchar(15), orderdate:date, $hashvalue_26:bigint, count:bigint]                                                                                                   
+                                         count := "presto.default.count"((count_24)) (3:29)                                                                                                                                                                       
+                                     - LocalExchange[HASH][$hashvalue_26] (clerk, orderdate) => [clerk:varchar(15), orderdate:date, count_24:bigint, $hashvalue_26:bigint]                                                                                        
+                                         - RemoteStreamingExchange[REPARTITION][$hashvalue_27] => [clerk:varchar(15), orderdate:date, count_24:bigint, $hashvalue_27:bigint]                                                                                      
+                                             - Aggregate(PARTIAL)[clerk, orderdate][$hashvalue_28] => [clerk:varchar(15), orderdate:date, $hashvalue_28:bigint, count_24:bigint]                                                                                  
+                                                     count_24 := "presto.default.count"(*) (3:29)                                                                                                                                                                 
+                                                 - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderdate:date, clerk:varchar(15), $hashvalue_28:bigint] 
+                                                         Estimates: {rows: 15000 (424.80kB), cpu: 375000.00, memory: 0.00, network: 0.00}/{rows: 15000 (424.80kB), cpu: 885000.00, memory: 0.00, network: 0.00}                                                   
+                                                         $hashvalue_28 := combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')), COALESCE($operator$hash_code(orderdate), BIGINT'0')) (3:66)                                      
+                                                         orderdate := tpch:orderdate (3:50)                                                                                                                                                                       
+                                                         clerk := tpch:clerk (3:50)                                                                                                                                                                               
+                                                         tpch:orderstatus                                                                                                                                                                                         
+                                                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                             
+                                                                                                                                                                                                                                                                  
+(1 row)
+
+4) 
+
+// merge partition preference with parent and apply the merged partition preference
+SET SESSION aggregation_partitioning_merging_strategy = 'TOP_DOWN'; // default is LEGACY
+
+explain 
+select clerk, sum(cnt) as total from 
+  (select clerk, orderdate, count(*) as cnt from orders group by clerk, orderdate) o
+group by clerk;
+
+                                                                                                                        Query Plan                                                                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, total] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                                
+         total := sum (2:15)                                                                                                                                                                                                                              
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                                 
+         - Project[projectLocality = LOCAL] => [clerk:varchar(15), sum:bigint]                                                                                                                                                                            
+             - Aggregate[clerk][$hashvalue_29] => [clerk:varchar(15), $hashvalue_29:bigint, sum:bigint]                                                                                                                                                   
+                     sum := "presto.default.sum"((count)) (2:15)                                                                                                                                                                                          
+                 - Project[projectLocality = LOCAL] => [clerk:varchar(15), count:bigint, $hashvalue_29:bigint]                                                                                                                                            
+                         $hashvalue_29 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (3:11)                                                                                                                                 
+                     - Aggregate(FINAL)[clerk, orderdate][$hashvalue] => [clerk:varchar(15), orderdate:date, $hashvalue:bigint, count:bigint]                                                                                                             
+                             count := "presto.default.count"((count_23)) (3:29)                                                                                                                                                                           
+                         - LocalExchange[HASH][$hashvalue_24] (clerk) => [clerk:varchar(15), orderdate:date, count_23:bigint, $hashvalue:bigint, $hashvalue_24:bigint]                                                                                    
+                             - RemoteStreamingExchange[REPARTITION][$hashvalue_26] => [clerk:varchar(15), orderdate:date, count_23:bigint, $hashvalue_25:bigint, $hashvalue_26:bigint]                                                                    
+                                 - Project[projectLocality = LOCAL] => [clerk:varchar(15), orderdate:date, $hashvalue_27:bigint, count_23:bigint, $hashvalue_28:bigint]                                                                                   
+                                         $hashvalue_28 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (3:66)                                                                                                                 
+                                     - Aggregate(PARTIAL)[clerk, orderdate][$hashvalue_27] => [clerk:varchar(15), orderdate:date, $hashvalue_27:bigint, count_23:bigint]                                                                                  
+                                             count_23 := "presto.default.count"(*) (3:29)                                                                                                                                                                 
+                                         - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderdate:date, clerk:varchar(15), $hashvalue_27:bigint] 
+                                                 Estimates: {rows: 15000 (424.80kB), cpu: 375000.00, memory: 0.00, network: 0.00}/{rows: 15000 (424.80kB), cpu: 885000.00, memory: 0.00, network: 0.00}                                                   
+                                                 $hashvalue_27 := combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')), COALESCE($operator$hash_code(orderdate), BIGINT'0')) (3:66)                                      
+                                                 orderdate := tpch:orderdate (3:50)                                                                                                                                                                       
+                                                 clerk := tpch:clerk (3:50)                                                                                                                                                                               
+                                                 tpch:orderstatus                                                                                                                                                                                         
+                                                     :: [["F"], ["O"], ["P"]]                                                                                                                                                                             
+                                                                                                                                                                                                                                                          
+(1 row)

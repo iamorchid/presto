@@ -71,7 +71,21 @@ public class ExchangeOperator
         {
             checkState(!closed, "Factory is already closed");
             OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, sourceId, ExchangeOperator.class.getSimpleName());
+
+            /**
+             * 虽然ExchangeOperator可以有多个实例（即关联的pipeline创建了多个Driver实例），但ExchangeOperator的多个实例共用
+             * 同一个ExchangeClient，通过{@link ExchangeClient#addLocation}实现可以知道，同一个{@link Split}只会被真正读
+             * 取一次，但具体数据可以被多个实例并发处理，当然一个{@link Page}仅支持被一个实例处理。
+             *
+             * 参考：
+             * {@link com.facebook.presto.operator.DriverFactory#getDriverInstances()}
+             * {@link com.facebook.presto.execution.SqlTaskExecution#scheduleDriversForTaskLifeCycle()}
+             */
             if (exchangeClient == null) {
+                /**
+                 * 这里使用的是pipeline级别的LocalMemoryContext，因为ExchangeClient是同一个pipeline的多个Driver共享的。目前
+                 * 来看，pipeline级别的{@link com.facebook.presto.memory.context.LocalMemoryContext}就这里用到。
+                 */
                 exchangeClient = taskExchangeClientManager.createExchangeClient(driverContext.getPipelineContext().localSystemMemoryContext());
             }
 

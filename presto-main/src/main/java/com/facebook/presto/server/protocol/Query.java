@@ -499,6 +499,10 @@ class Query
         // (1) the query is not done AND the query state is not FAILED
         //   OR
         // (2)there is more data to send (due to buffering)
+        /**
+         * 如果不要求获取final QueryInfo的情况下，在{@link ExchangeClient#isClosed()}为true的情况下，就可以结束了。另外，
+         * 对于queryInfo.getState()为FAILED时，{@link #closeExchangeClientIfNecessary}会将exchangeClient关闭。
+         */
         if ((!queryInfo.isFinalQueryInfo() && queryInfo.getState() != FAILED) || !exchangeClient.isClosed()) {
             nextToken = OptionalLong.of(token + 1);
         }
@@ -560,6 +564,14 @@ class Query
         // Close the exchange client if the query has failed, or if the query
         // is done and it does not have an output stage. The latter happens
         // for data definition executions, as those do not have output.
+        /**
+         * output的结果被全部消费完成后，exchangeClient会内部自己调用close进行清理。如果output最终没有消费完成，
+         * 则query最终的状态一定是FAILED才对，因此这里只需要考虑FAILED场景（output长久没有被消费的query，最终会
+         * 被{@link com.facebook.presto.execution.QueryTracker#failAbandonedQueries}置为FAILED）。
+         */
+        /**
+         * TODO 分析query何时变为FINISHED？？？
+         */
         if ((queryInfo.getState() == FAILED) ||
                 (queryInfo.getState().isDone() && !queryInfo.getOutputStage().isPresent())) {
             exchangeClient.close();

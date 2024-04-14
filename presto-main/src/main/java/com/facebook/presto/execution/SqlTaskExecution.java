@@ -82,7 +82,7 @@ import static java.util.stream.Collectors.toList;
 
 public class SqlTaskExecution
 {
-    // For each driver in a task, it belong to a pipeline and a driver life cycle.
+    // For each driver in a task, it belongs to a pipeline and a driver life cycle.
     // Pipeline and driver life cycle are two perpendicular organizations of tasks.
     //
     // * All drivers in the same pipeline has the same shape.
@@ -197,6 +197,10 @@ public class SqlTaskExecution
             for (DriverFactory driverFactory : localExecutionPlan.getDriverFactories()) {
                 Optional<PlanNodeId> sourceId = driverFactory.getSourceId();
                 if (sourceId.isPresent() && tableScanSources.contains(sourceId.get())) {
+                    /**
+                     * 这里的{@link DriverFactory#pipelineExecutionStrategy}既可以是grouped，也可以是ungrouped。另外，一个task
+                     * 中允许不同的{@link DriverFactory}使用不同的{@link PipelineExecutionStrategy}。
+                     */
                     driverRunnerFactoriesWithSplitLifeCycle.put(sourceId.get(), new DriverSplitRunnerFactory(driverFactory, true));
                 }
                 else {
@@ -333,6 +337,10 @@ public class SqlTaskExecution
                 .map(source -> new TaskSource(
                         source.getPlanNodeId(),
                         source.getSplits().stream()
+                                /**
+                                 * 这里可以保证只在传入的TaskSource中保留之前没有处理过的splits。对于table scan的场景而言，
+                                 * 总是为每个split创建一个新的{@link Driver}。
+                                 */
                                 .filter(scheduledSplit -> scheduledSplit.getSequenceId() > currentMaxAcknowledgedSplit)
                                 .collect(Collectors.toSet()),
                         // Like splits, noMoreSplitsForLifespan could be pruned so that only new items will be processed.
@@ -435,6 +443,10 @@ public class SqlTaskExecution
                 // Similarly, it wouldn't make sense for TaskWide to start executing drivers in pipeline B until at least
                 // one lifespan has finished scheduling pipeline A.
                 // This is why getSchedulingPlanNode returns an Optional.
+                /**
+                 * 什么情况下，task中会存在不同的scan nodes使用不同的pipelineExecutionStrategy？
+                 * 可以参考：sqls-join-bucketed中有关 case #4 的说明。
+                 */
                 while (true) {
                     Optional<PlanNodeId> optionalSchedulingPlanNode = schedulingLifespan.getSchedulingPlanNode();
                     if (!optionalSchedulingPlanNode.isPresent()) {
@@ -528,6 +540,7 @@ public class SqlTaskExecution
     {
         // This method is called when a split that belongs to a previously unseen driver group is scheduled.
         // It schedules drivers for all the pipelines that have driver group life cycle.
+        // 根据具体调用逻辑知道，lifespan.isTaskWide()为true时，根本不会调用这个函数
         if (lifespan.isTaskWide()) {
             checkArgument(driverRunnerFactoriesWithDriverGroupLifeCycle.isEmpty(), "Instantiating pipeline of driver group lifecycle at task level is not allowed");
             return;
@@ -622,6 +635,9 @@ public class SqlTaskExecution
         return noMoreSplits.build();
     }
 
+    /**
+     * 何时调用这个方法？可以参考{@link Status#checkLifespanCompletion(Lifespan)}何时调用说明。
+     */
     private synchronized void checkTaskCompletion()
     {
         if (taskStateMachine.getState().isDone()) {
@@ -639,7 +655,23 @@ public class SqlTaskExecution
             return;
         }
 
+        /**
+         * TODO 执行到这里时，是否可能还有新的{@link Driver}创建出来？不可能。
+         *
+         * Drivers可以首先分为两类：即包含TableScanNode和不包含TableScanNode（即是否时split lifecycle）。对于包含TableScanNode的场景，
+         * 上面的for循环已经保证了所有的{@link DriverSplitRunner}都已经创建，同时status.getRemainingDriver()为0保证了对应的driver也
+         * 已全部创建出来（参见{@link #scheduleTableScanSource})。
+         *
+         * 而对于不包含TableScanNode的场景，drivers由可以分为task lifecycle和driver-group lifecycle。对于task lifecycle的drivers，
+         * 一开始就已创建好（见{@link #scheduleDriversForTaskLifeCycle()}；而对于driver-group lifecycle的drivers，它是跟随grouped
+         * 类型的split lifecycle的drivers一起创建的（参见{@link #scheduleTableScanSource}），且总是先于split lifecycle的drivers创
+         * 建完成（参见{@link #scheduleTableScanSource})。
+         */
+
         // no more output will be created
+        /**
+         * 只有当所有的{@link Driver}都完成后，才能保证outputBuffer不会有新data写入。
+         */
         outputBuffer.setNoMorePages();
 
         // are there still pages in the output buffer?
@@ -756,7 +788,7 @@ public class SqlTaskExecution
         // All splits have been received from scheduler.
         // No more splits will be added to the pendingSplits set.
         NO_MORE_SPLITS,
-        // All splits has been turned into DriverSplitRunner.
+        // All splits have been turned into DriverSplitRunner.
         FINISHED,
     }
 
@@ -870,7 +902,12 @@ public class SqlTaskExecution
         public Optional<PlanNodeId> getSchedulingPlanNode()
         {
             checkState(!isDone());
+
             while (!isDone()) {
+                /**
+                 * 下面的逻辑比较难理解，需要参考{@link #scheduleTableScanSource}注解中的说明。绝大部分场景应该是满足第一个
+                 * if条件的，即不同的scan nodes之间使用的lifespan应是一样的。
+                 */
                 // Return current plan node if this lifespan is compatible with the plan node.
                 // i.e. One of the following bullet points is true:
                 // * The execution strategy of the plan node is grouped. And lifespan represents a driver group.
@@ -878,6 +915,15 @@ public class SqlTaskExecution
                 if (manager.stageExecutionDescriptor.isScanGroupedExecution(manager.sourceStartOrder.get(schedulingPlanNodeOrdinal)) != lifespan.isTaskWide()) {
                     return Optional.of(manager.sourceStartOrder.get(schedulingPlanNodeOrdinal));
                 }
+
+                /**
+                 * 执行到这里，说明schedulingPlanNodeOrdinal对应的scan node的lifespan和目标{@link #lifespan}不一致（这种
+                 * 情况发生在task中的scan nodes同时存在grouped和ungrouped两类lifespan）。因此，schedulingPlanNodeOrdinal
+                 * 对应的scan node的调度（实际上是相关Driver的调度）不应该由本{@link SchedulingLifespan}控制。
+                 *
+                 * 下面if条件满足时，说明schedulingPlanNodeOrdinal对应的scan node正由其他类型的SchedulingLifespan进行调度，
+                 * 因此需要等待。否则，说明它已经调度完成，可以直接跳过。
+                 */
                 // This lifespan is incompatible with the plan node. As a result, this method should either
                 // return empty to indicate that scheduling for this lifespan is blocked, or skip the current
                 // plan node and went on to the next one. Which one of the two happens is dependent on whether
@@ -944,8 +990,15 @@ public class SqlTaskExecution
         {
             Driver driver = driverFactory.createDriver(driverContext);
 
-            // record driver so other threads add remote sources can see the driver
+            // record driver so other threads that add remote sources can see the driver
             // NOTE: this MUST be done before reading remoteSources, so we see a consistent view of the remote sources
+            /**
+             * 理解上面的注释很关键，这里必须在下面为driver更新source之前就记录driver，否则下面driver更新source操作之后（但记
+             * 录driver之前），发生了{@link #addSources}，则某些source可能得不到调度。另外，因为像这样的并发操作，对于driver
+             * 的updateSource而言，我们可能先用新的source，然后使用老的source，但driver会保证不用老的source覆盖新的source。
+             *
+             * 参考：{@link TaskSource#update(TaskSource)}
+             */
             drivers.add(new WeakReference<>(driver));
 
             if (partitionedSplit != null) {
@@ -1064,7 +1117,7 @@ public class SqlTaskExecution
         {
             Driver driver;
             synchronized (this) {
-                // if close() was called before we get here, there's not point in even creating the driver
+                // if close() was called before we get here, there's no point in even creating the driver
                 if (closed) {
                     return Futures.immediateFuture(null);
                 }
@@ -1114,6 +1167,12 @@ public class SqlTaskExecution
         @Override
         public void stateChanged(BufferState newState)
         {
+            /**
+             * [question]
+             * 如果output buffer的状态都已经变为FINISHED（比如作为消费端的下游stage被cancel），可以提前终止当前的
+             * query（即cancel当前query 或者 将当前query的状态直接置为FINISHED）? 因为后续的数据处理已经没有意义，
+             * outputBuffer会将新写入的数据直接丢弃。
+             */
             if (newState == BufferState.FINISHED) {
                 SqlTaskExecution sqlTaskExecution = sqlTaskExecutionReference.get();
                 if (sqlTaskExecution != null) {
@@ -1201,6 +1260,9 @@ public class SqlTaskExecution
             }
             per(pipelineId, lifespan).noMoreDriverRunner = true;
             if (per(pipelineId, lifespan).pendingCreation == 0) {
+                /**
+                 * 后面{@link DriverSplitRunnerFactory#closeDriverFactoryIfFullyCreated}会用到这个
+                 */
                 per(pipelineId).unacknowledgedLifespansWithNoMoreDrivers.add(lifespan);
             }
             per(pipelineId).lifespansWithNoMoreDriverRunners++;
@@ -1313,6 +1375,15 @@ public class SqlTaskExecution
             return result;
         }
 
+        /**
+         * 何时需要调用这个方法？很简单，每次if条件可能满足时就应该调用。
+         * 1）lifespan下存在新的pipeline已经完成了{@link DriverSplitRunner}的创建
+         * 2）lifespan下所有运行的{@link Driver}都已经退出
+         * 3）lifespan对应的output全部被消费
+         *
+         * 参考：
+         * {@link com.facebook.presto.execution.buffer.LifespanSerializedPageTracker#isFinishedForLifespan}
+         */
         private void checkLifespanCompletion(Lifespan lifespan)
         {
             if (lifespan.isTaskWide()) {
@@ -1340,6 +1411,9 @@ public class SqlTaskExecution
             }
 
             // Cool! All done!
+            /**
+             * completed driver group信息会传回给coordinator，促使coordinator调度新的driver group到本worker。
+             */
             taskContext.addCompletedDriverGroup(lifespan);
         }
 

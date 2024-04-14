@@ -115,7 +115,16 @@ public final class LocalProperties
                 constants.addAll(actualIterator.next().getColumns());
             }
             Optional<LocalProperty<T>> simplifiedDesired = desiredProperty.withConstants(constants);
-            consumeMoreActuals &= !simplifiedDesired.isPresent(); // Only continue processing actuals if all previous desired properties were fully satisfied
+
+            /**
+             * 如果actuals为：[G(a, b), S(d), S(e)] （表示的含义为：先按照列a和b分组，然后对同一分组中的结果按照d和e排序，其中
+             * 同一分组的数据肯定分到同一个partition并连续组织在一起），desired为：[G(a, b, c), S(d), S(e)]，很显然，actuals
+             * 中的{@link SortingProperty}对desired来说，没有任何作用，因为分组的范畴不一样。但是actuals的分组对于desired是
+             * 有意义的，因为desired可以基于actuals的每一个分组结果进行按照列c进一步划分，而不用等到读取所有所有后再进行分组计算。
+             */
+            // Only continue processing actuals if all previous desired properties were fully satisfied
+            consumeMoreActuals &= !simplifiedDesired.isPresent();
+
             result.add(simplifiedDesired);
         }
         return result;

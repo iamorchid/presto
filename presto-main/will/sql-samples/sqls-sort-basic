@@ -1,0 +1,101 @@
+## 实现原理参考：com.facebook.presto.sql.planner.optimizations.ActualProperties
+
+
+1) 默认采用 distributed_sort
+select clerk, orderkey from orders order by clerk;
+
+                                                                                                                                                           Query Plan                                                                                                    
+                                                                                       Query Plan                                                                                        
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, orderkey] => [clerk:varchar, orderkey:bigint]  
+     /* 带有orderingScheme的Remote ExchangeNode */                                                                                                                          
+     - RemoteStreamingMerge[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar] 
+        /* 带有orderingScheme的local ExchangeNode */                                                                                                     
+         - LocalMerge[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar]                                                                                                        
+             - PartialSort[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar] 
+                /* REPARTITION 采用 ROUND_ROBIN 的方式 */                                                                                                    
+                 - RemoteStreamingExchange[REPARTITION] => [orderkey:bigint, clerk:varchar]                                                                                              
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                      
+                     - TableScan[TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}] => [orderkey:bigint, clerk:varchar] 
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                               
+                             orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:37)                                      
+                             clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (1:37)                                           
+                                                                                                                                                                                         
+(1 row)
+
+                                                                                        Query Plan                                                                                        
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                      
+     Output layout: [clerk, orderkey]                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                       
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                        
+     - Output[clerk, orderkey] => [clerk:varchar, orderkey:bigint]     
+         /* 带有orderingScheme的RemoteSourceNode */                                                                                                        
+         - RemoteMerge[1] => [orderkey:bigint, clerk:varchar]                                                                                                                             
+                                                                                                                                                                                          
+ Fragment 1 [ROUND_ROBIN]                                                                                                                                                                 
+     Output layout: [orderkey, clerk]                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                       
+     Stage Execution Strategy: UNGROUPED_EXECUTION
+     /* 带有orderingScheme的local ExchangeNode */                                                                                                                                       
+     - LocalMerge[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar]                                                                                                               
+         - PartialSort[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar]                                                                                                          
+             - RemoteSource[2] => [orderkey:bigint, clerk:varchar]                                                                                                                        
+                                                                                                                                                                                          
+ Fragment 2 [SOURCE]                                                                                                                                                                      
+     Output layout: [orderkey, clerk]                                                                                                                                                     
+     Output partitioning: ROUND_ROBIN []                                                                                                                                                  
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                        
+     - TableScan[TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}, grouped = false] => [orderkey:bigint, clerk:varchar] 
+             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                
+             orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:56)                                                       
+             clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (1:56)                                                            
+                                                                                                                                                                                          
+                                                                                                                                                                                          
+(1 row)
+
+
+
+2） 关闭distributed_sort
+set session distributed_sort=false;
+select clerk, orderkey from orders order by clerk;
+
+                                                                                     Query Plan                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, orderkey] => [clerk:varchar, orderkey:bigint]                                                                                                                       
+     - Sort[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar]    
+         /* remote exchange对应fixed streams，排序需要保证single stream，这里需要引入local exchange */                                                                                                            
+         - LocalExchange[SINGLE] () => [orderkey:bigint, clerk:varchar]                                                                                                              
+                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                          
+             - RemoteStreamingExchange[GATHER] => [orderkey:bigint, clerk:varchar]                                                                                                   
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                      
+                 - TableScan[TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}] => [orderkey:bigint, clerk:varchar] 
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                               
+                         orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:37)                                      
+                         clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (1:37)                                           
+                                                                                                                                                                                     
+(1 row)
+
+                                                                                        Query Plan                                                                                        
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                      
+     Output layout: [clerk, orderkey]                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                       
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                        
+     - Output[clerk, orderkey] => [clerk:varchar, orderkey:bigint]                                                                                                                        
+         - Sort[clerk ASC_NULLS_LAST] => [orderkey:bigint, clerk:varchar]                                                                                                                 
+             - LocalExchange[SINGLE] () => [orderkey:bigint, clerk:varchar]                                                                                                               
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                           
+                 - RemoteSource[1] => [orderkey:bigint, clerk:varchar]                                                                                                                    
+                                                                                                                                                                                          
+ Fragment 1 [SOURCE]                                                                                                                                                                      
+     Output layout: [orderkey, clerk]                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                       
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                        
+     - TableScan[TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}, grouped = false] => [orderkey:bigint, clerk:varchar] 
+             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                
+             orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:56)                                                       
+             clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (1:56)                                                            
+                                                                                                                                                                                          
+                                                                                                                                                                                          
+(1 row)

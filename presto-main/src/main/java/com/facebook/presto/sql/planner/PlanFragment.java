@@ -45,11 +45,37 @@ public class PlanFragment
     private final PlanFragmentId id;
     private final PlanNode root;
     private final Set<VariableReferenceExpression> variables;
+
+    /**
+     * 这个PartitioningHandle 和 {@link #partitioningScheme#partitioning}中的PartitioningHandle有啥区别 ？？？
+     *
+     * 这里的PartitioningHandle用来指示如何对本fragment的splits进行 partition 以便进行并行执行（即决定splitToBucket，
+     * bucketToNode，partitionToNode等）。因此，这里的PartitioningHandle和本fragment的调度有关。
+     * 参考：
+     * {@link com.facebook.presto.sql.planner.NodePartitioningManager#getNodePartitioningMap}
+     * {@link com.facebook.presto.sql.planner.BasePlanFragmenter#createRemoteStreamingExchange}
+     * {@link com.facebook.presto.sql.planner.BasePlanFragmenter#setDistributionForExchange}
+     *
+     * 同时，这里的PartitioningHandle也会设置为上游的{@link PartitioningScheme#partitioning}的PartitioningHandle，
+     * 用于决定上游如何对output进行partition（即决定bucketToPartition以及output的BucketFunction）。
+     */
     private final PartitioningHandle partitioning;
+
     private final List<PlanNodeId> tableScanSchedulingOrder;
     private final List<Type> types;
     private final List<RemoteSourceNode> remoteSourceNodes;
+
+    /**
+     * 这里的 PartitioningScheme 其实是下游fragment（即需要从本fragment读取的数据的fragment）对本fragment
+     * 的输出的预期，即结果应该划分到哪个partition下（{@link PartitioningScheme#bucketToPartition}）。这个
+     * 和本fragment产生多少个任务没有任何关系，只影响每个任务产生的结果如何进行划分（即结果对应的output buffer）。
+     *
+     * 参考：
+     * {@link com.facebook.presto.sql.planner.BasePlanFragmenter#createRemoteStreamingExchange}
+     * {@link com.facebook.presto.sql.planner.NodePartitioningManager#getPartitionFunction}。
+     */
     private final PartitioningScheme partitioningScheme;
+
     private final StageExecutionDescriptor stageExecutionDescriptor;
     private final boolean outputTableWriterFragment;
     private final StatsAndCosts statsAndCosts;

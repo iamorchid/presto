@@ -147,6 +147,7 @@ public final class AggregationNode
 
     public boolean hasEmptyGroupingSet()
     {
+        // EmptyGroupingSet 即这里所指的 GlobalGroupingSet
         return !groupingSets.getGlobalGroupingSets().isEmpty();
     }
 

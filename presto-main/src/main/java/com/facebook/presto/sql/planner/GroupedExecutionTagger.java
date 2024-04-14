@@ -85,6 +85,9 @@ class GroupedExecutionTagger
             return GroupedExecutionTagger.GroupedExecutionProperties.notCapable();
         }
 
+        /**
+         * [question] 这里的逻辑具体什么含义？？注释没怎么看明白。。。
+         */
         if ((node.getType() == JoinNode.Type.RIGHT || node.getType() == JoinNode.Type.FULL) && !right.currentNodeCapable) {
             // For a plan like this, if the fragment participates in grouped execution,
             // the LookupOuterOperator corresponding to the RJoin will not work execute properly.
@@ -116,6 +119,11 @@ class GroupedExecutionTagger
                 return left;
             case PARTITIONED:
                 if (left.currentNodeCapable && right.currentNodeCapable) {
+                    /**
+                     * 这种情况说明是colocated-join，因为{@link com.facebook.presto.sql.planner.plan.RemoteSourceNode}不满足grouped execution。
+                     * 而根据{@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#planPartitionedJoin}可以知道，只有两
+                     * 张表的table partitioning兼容时，才具备colocated-join的条件。
+                     */
                     checkState(left.totalLifespans == right.totalLifespans, format("Mismatched number of lifespans on left(%s) and right(%s) side of join", left.totalLifespans, right.totalLifespans));
                     return new GroupedExecutionTagger.GroupedExecutionProperties(
                             true,
@@ -136,6 +144,19 @@ class GroupedExecutionTagger
                 //   The build/right side needs to buffer fully for this JOIN, but the probe/left side will still stream through.
                 //   As a result, there is no reason to change currentNodeCapable or subTreeUseful to false.
                 //
+                /**
+                 * 这里将subTreeUseful强制设置为true，因为grouped execution对join是有帮助的
+                 */
+                if (left.currentNodeCapable && !left.subTreeUseful) {
+                    return new GroupedExecutionTagger.GroupedExecutionProperties(
+                            true,
+                            true,
+                            ImmutableList.<PlanNodeId>builder()
+                                    .addAll(left.capableTableScanNodes)
+                                    .build(),
+                            left.totalLifespans,
+                            left.recoveryEligible);
+                }
                 return left;
             default:
                 throw new UnsupportedOperationException("Unknown distribution type: " + node.getDistributionType());
@@ -179,9 +200,12 @@ class GroupedExecutionTagger
             switch (node.getStep()) {
                 case SINGLE:
                 case FINAL:
+                    // 底层table scan和aggregation之间没有引入exchange，说明aggregation采用的列 可以被 table的partitioning列
+                    // 划分（即aggregation采用的列 包含了 table的partitioning列）。
                     return new GroupedExecutionTagger.GroupedExecutionProperties(true, true, properties.capableTableScanNodes, properties.totalLifespans, properties.recoveryEligible);
                 case PARTIAL:
                 case INTERMEDIATE:
+                    // 此时，grouped execution对aggregation来说，不怎么useful
                     return properties;
             }
         }
@@ -259,7 +283,7 @@ class GroupedExecutionTagger
         else {
             return new GroupedExecutionTagger.GroupedExecutionProperties(
                     true,
-                    false,
+                    false /* grouped execution 对table scan本身来说，没有太大促进作用 */,
                     ImmutableList.of(node.getId()),
                     partitionHandles.size(),
                     metadata.getConnectorCapabilities(session, node.getTable().getConnectorId()).contains(SUPPORTS_REWINDABLE_SPLIT_SOURCE));

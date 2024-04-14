@@ -436,6 +436,11 @@ public final class PageBufferClient
         requestsCompleted.incrementAndGet();
 
         if (t instanceof PrestoException) {
+            /**
+             * 走到这里，说明遇到了不可恢复的业务错误，此时不应该再进行retry。即调用clientCallback.clientFailed后，
+             * 应该理解return，而不应该再调用clientCallback.requestComplete，因为它会再次将本PageBufferClient
+             * 放到调度队列中。
+             */
             clientCallback.clientFailed(PageBufferClient.this, t);
         }
 

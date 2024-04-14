@@ -280,6 +280,24 @@ public class TaskResource
         requireNonNull(taskId, "taskId is null");
         TaskInfo taskInfo;
 
+        /**
+         * abort为true的场景，发生在query中的其他任务失败 或者 query被用户主动cancel（注意，不是stage被cancel）。
+         * 这种情况下，coordinator会主动abort query相关的所有任务。
+         *
+         * 对于abort为true场景，会将当前任务的状态置为{@link TaskState#FAILED}，但output buffer的状态不会标志
+         * 为complete，因此下游任务（即本任务output的consumer）会被block住，即不会正常结束，从而保证它的终态也将由
+         * coordinator通过abort来控制。
+         *
+         * 对于abort为false的场景，目前发生在某个stage被用户主动cancel了。这种情况可以认为是stage被提前结束了，不
+         * 影响query的正常执行（尽管被cancel的stage及其相关的任务最终状态为CANCLLED）。
+         *
+         * 参考：
+         * {@link com.facebook.presto.server.QueryResource#cancelStage}
+         * {@link com.facebook.presto.server.QueryResource#canceQuery}
+         * {@link com.facebook.presto.execution.scheduler.SqlQueryScheduler#abort}
+         * {@link com.facebook.presto.execution.SqlTask#initialize}
+         * {@link com.facebook.presto.execution.buffer.PartitionedOutputBuffer#fail()}
+         */
         if (abort) {
             taskInfo = taskManager.abortTask(taskId);
         }

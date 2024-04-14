@@ -184,6 +184,8 @@ public class IterativeOptimizer
                 Rule.Result result = transform(node, rule, matcher, context);
 
                 if (result.getTransformedPlan().isPresent()) {
+                    System.out.println("[will] effective rule: " + rule.getClass().getName());
+
                     // If we rewrite a plan node, topmost node should remain statistically equivalent.
                     PlanNode transformedNode = result.getTransformedPlan().get();
                     PlanNode resolvedtransformedNode = context.lookup.resolve(result.getTransformedPlan().get());

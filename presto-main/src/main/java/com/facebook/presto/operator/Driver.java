@@ -275,6 +275,10 @@ public class Driver
                 this.split.set(split);
             }
 
+            /**
+             * 对于{@link TableScanOperator}而言，split只允许添加一次（即每个split由独立的Driver来处理），具体逻辑参考
+             * {@link com.facebook.presto.execution.SqlTaskExecution#scheduleTableScanSource}。
+             */
             Supplier<Optional<UpdatablePageSource>> pageSource = sourceOperator.addSplit(newSplit);
             deleteOperator.ifPresent(deleteOperator -> deleteOperator.setPageSource(pageSource));
         }
@@ -475,7 +479,7 @@ public class Driver
                     // Finish the next operator, which is now the first operator.
                     if (!activeOperators.isEmpty()) {
                         Operator newRootOperator = activeOperators.get(0);
-                        newRootOperator.finish();
+                        newRootOperator.finish(); // 告诉operator进行finish操作
                         newRootOperator.getOperatorContext().recordFinish(operationTimer);
                     }
                     break;

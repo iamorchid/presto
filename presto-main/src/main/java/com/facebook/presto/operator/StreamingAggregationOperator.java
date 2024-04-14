@@ -123,6 +123,10 @@ public class StreamingAggregationOperator
 
     private List<Aggregator> setupAggregates(Step step, List<AccumulatorFactory> accumulatorFactories)
     {
+        /**
+         * 注意，对于streaming aggregation，用不到{@link com.facebook.presto.spi.function.aggregation.GroupedAccumulator}。
+         * 这里创建的Aggregator只会用到普通的{@link com.facebook.presto.spi.function.aggregation.Accumulator}。
+         */
         ImmutableList.Builder<Aggregator> builder = ImmutableList.builder();
         for (AccumulatorFactory factory : accumulatorFactories) {
             builder.add(new Aggregator(factory, step, this::updateMemoryUsage));
@@ -211,6 +215,8 @@ public class StreamingAggregationOperator
                 startPosition = nextGroupStart;
             }
             else {
+                // 注意，currentGroup中的rows已经参与到了aggregation的计算当中。currentGroup主要作用是用于判断
+                // 和后面的数据是否属于同一个group，如果不是，则用于提供上一个group相关的group by列的值。
                 currentGroup = page.getRegion(page.getPositionCount() - 1, 1);
                 return;
             }
@@ -243,6 +249,7 @@ public class StreamingAggregationOperator
             pageBuilder.reset();
         }
 
+        // 【will】 如果Aggregator支持reset方法，则效率将会更高些（避免大量临时对象的创建）。
         aggregates = setupAggregates(step, accumulatorFactories);
     }
 

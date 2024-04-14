@@ -192,6 +192,10 @@ public class AddLocalExchanges
             // TODO: extract to its own optimization after AddLocalExchanges once the
             // constraint optimization framework is in a better state to be extended
             PlanWithProperties childPlan = planAndEnforce(node.getSource(), any(), singleStream());
+
+            /**
+             * [TODO] 对于已经排序但不是single stream的情况，其实也有利于排序（即进行额外的归并排序即可）
+             */
             if (childPlan.getProperties().isSingleStream() && childPlan.getProperties().isOrdered()) {
                 OrderingScheme orderingScheme = node.getOrderingScheme();
                 List<LocalProperty<VariableReferenceExpression>> desiredProperties = orderingScheme.getOrderByVariables().stream()
@@ -315,6 +319,7 @@ public class AddLocalExchanges
         @Override
         public PlanWithProperties visitAggregation(AggregationNode node, StreamPreferredProperties parentPreferences)
         {
+            // 此时还没有进行 PushPartialAggregationThroughExchange，因此不会存在Final和PARTIAL
             checkState(node.getStep() == AggregationNode.Step.SINGLE, "step of aggregation is expected to be SINGLE, but it is %s", node.getStep());
 
             if (hasSingleNodeExecutionPreference(node, metadata.getFunctionAndTypeManager())) {
@@ -342,15 +347,33 @@ public class AddLocalExchanges
             StreamPreferredProperties childRequirements = parentPreferences
                     .constrainTo(node.getSource().getOutputVariables())
                     .withDefaultParallelism(session)
+                    /**
+                     * 参见 {@link #visitWindow}中关于partitioning设置的说明
+                     */
                     .withPartitioning(groupingKeys);
 
             PlanWithProperties child = planAndEnforce(node.getSource(), childRequirements, childRequirements);
 
+            /**
+             * [question] 什么场景下会产生preGroupedSymbols？
+             * select clerk, orderdate, sum(total) as total_second
+             * from (
+             *     select clerk, orderdate, orderkey,
+             *       sum(totalprice) over (partition by clerk order by orderkey) as total
+             *     from orders
+             * )
+             * group by clerk, orderdate
+             */
             List<VariableReferenceExpression> preGroupedSymbols = ImmutableList.of();
             // Logic in LocalProperties.match(localProperties, groupingKeys)
             // 1. Extract the longest prefix of localProperties to a set that is a subset of groupingKeys
             // 2. Iterate grouped-by keys and add the elements that's not in the set to the result
             // Result would be a List of one element: Optional<GroupingProperty>, GroupingProperty would contain one/multiple elements from step 2
+            //
+            // 参考TestLocalProperties.java中的testGroupedTuple方法:
+            // [A, B]   表示: GroupingProperty(A), GroupingProperty(B)
+            // [(B, A)] 表示: GroupingProperty(B, A)
+            //
             // Eg:
             // [A, B] [(B, A)]     ->   List.of(Optional.empty())
             // [A, B] [B]          ->   List.of(Optional.of(GroupingProperty(B)))
@@ -388,6 +411,14 @@ public class AddLocalExchanges
             StreamPreferredProperties childRequirements = parentPreferences
                     .constrainTo(node.getSource().getOutputVariables())
                     .withDefaultParallelism(session)
+                    /**
+                     * 这里会尝试计算parent preferences和node.getPartitionBy()的交集。另外，{@link #visitWindow}返回
+                     * 的{@link StreamProperties#partitioningColumns}也是基于这个交集，而不是node.getPartitionBy()，
+                     * 否则，parent结点（即直接依赖本WindowNode的结点）在进行{@link StreamPreferredProperties#isSatisfiedBy}
+                     * 判断时，{@link StreamProperties#isPartitionedOn}将不满足，导致引入额外的LocalExchangeNode。
+                     *
+                     * 参考{@link StreamPropertyDerivations.Visitor#visitWindow} 如何提取StreamProperties。
+                     */
                     .withPartitioning(node.getPartitionBy());
 
             PlanWithProperties child = planAndEnforce(node.getSource(), childRequirements, childRequirements);
@@ -661,15 +692,23 @@ public class AddLocalExchanges
         public PlanWithProperties visitExchange(ExchangeNode node, StreamPreferredProperties parentPreferences)
         {
             checkArgument(!node.getScope().isLocal(), "AddLocalExchanges can not process a plan containing a local exchange");
+
             // this node changes the input organization completely, so we do not pass through parent preferences
+            /**
+             * 由{@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#visitRemoteSource}可以知道，
+             * 当remote ExchangeNode定义了ordering scheme后，会采用single Driver对结果进行归并排序。因此，这里对上游算子
+             * 的stream partitioning方式没有任何要求（同时，使用parentPreferences来影响上游算子，也没有任何意义）。
+             */
             if (node.getOrderingScheme().isPresent()) {
                 return planAndEnforceChildren(
                         node,
                         any().withOrderSensitivity(),
                         any().withOrderSensitivity());
             }
+
             return planAndEnforceChildren(
                     node,
+                    // [question] 什么场景下会需要设置enforce_fixed_distribution_for_output_operator为true？
                     isEnforceFixedDistributionForOutputOperator(session) ? fixedParallelism() : any(),
                     defaultParallelism(session));
         }
@@ -769,6 +808,18 @@ public class AddLocalExchanges
                     .collect(toImmutableList());
             StreamPreferredProperties buildPreference;
             if (getTaskConcurrency(session) > 1) {
+                /**
+                 * 这里其实有个问题，假设right的上游node的{@link StreamProperties}满足right的需求且将结果按照buildHashVariables
+                 * 划分到多个stream中，给定probe table中的一行结果，又怎么知道根据build table哪个partition进行探测（build table会
+                 * 按照partitioning columns分成多个partition）？
+                 *
+                 * 这里其实有个前提，要求build table对应的算子（及其依赖的上游算子），在进行partition操作时，需要采用和probe探测操作相
+                 * 同的hash算法以及相同的hashToPartition对应方式。
+                 *
+                 * 参考：
+                 * {@link com.facebook.presto.sql.planner.optimizations.HashGenerationOptimizer.HashComputation#getHashFunctionCall}
+                 * {@link com.facebook.presto.operator.scalar.CombineHashFunction}
+                 */
                 buildPreference = exactlyPartitionedOn(buildHashVariables);
             }
             else {

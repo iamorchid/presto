@@ -61,6 +61,10 @@ final class SpilledLookupSourceHandle
     public synchronized ListenableFuture<Supplier<LookupSource>> getLookupSource()
     {
         assertState(State.SPILLED);
+        /**
+         * 将unspillingRequested设置为Done，表明有user需要load已经spilled数据，可以看到spilled数据是lazy load的。
+         * 参考{@link HashBuilderOperator#unspillLookupSourceIfRequested()}使用这个标志位。
+         */
         unspillingRequested.set(null);
         setState(State.UNSPILLING);
         checkState(unspilledLookupSource == null, "unspilledLookupSource already set");

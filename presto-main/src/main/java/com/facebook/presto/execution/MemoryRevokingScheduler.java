@@ -297,6 +297,7 @@ public class MemoryRevokingScheduler
             public Void visitOperatorContext(OperatorContext operatorContext, AtomicLong remainingBytesToRevoke)
             {
                 if (remainingBytesToRevoke.get() > 0) {
+                    // 如果operator还正在处理上一次的revoking，则{@link OperatorContext#requestMemoryRevoking()}将返回0
                     long revokedBytes = operatorContext.requestMemoryRevoking();
                     if (revokedBytes > 0) {
                         remainingBytesToRevoke.addAndGet(-revokedBytes);

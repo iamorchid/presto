@@ -353,6 +353,13 @@ public class HashBuilderOperator
         index.addPage(page);
 
         if (spillEnabled) {
+            /**
+             * 注意，通过{@link com.facebook.presto.execution.MemoryRevokingScheduler#onMemoryReserved}知道，如果
+             * queryLimitSpillEnabled没有开启，则即使index使用的内存超过了maxUserMemoryBytes的情况下，spill也可能没有被
+             * 调度，比如当前memory pool还比较空闲。但这是不对的，因为这种情况下{@link #spillInput}肯定会失败。
+             *
+             * 因此，应该在这里提前校验已经收集的pages是否超过了限制。
+             */
             localRevocableMemoryContext.setBytes(index.getEstimatedSize().toBytes());
         }
         else {
@@ -370,6 +377,10 @@ public class HashBuilderOperator
         checkSpillSucceeded(spillInProgress);
         long sizeOfPage = page.getSizeInBytes();
 
+        /**
+         * 对于某些其他算子，并不需要下面的限制，因为它们并不需要像{@link HashBuilderOperator}一样将spilled数据全部加载
+         * 到内存当中，比如对于{@link OrderByOperator}。另外，下面的限制可以{@link updateIndex}中提前做掉。
+         */
         // check that spilled data can still fit into memory limit as otherwise
         // it fails later during unspilling when all spilled pages need to be loaded into memory
         long maxUserMemoryBytes = getQueryMaxMemoryPerNode(operatorContext.getSession()).toBytes();
@@ -411,6 +422,11 @@ public class HashBuilderOperator
             return spillIndex();
         }
         else if (state == State.LOOKUP_SOURCE_BUILT) {
+            /**
+             * 达到这个状态还需要考虑spill？？？状态变为INPUT_SPILLED，后面还要再次进行unsplill以及index的构建过程，而且基本上是会立
+             * 刻进行的（这次spill结束后，基本上会立刻再次调用{@link #finish()}）。另外，更为复杂的是{@link #finishInput()}后，创
+             * 建的LookupSourceSupplier可能已经暴露给消费者了（其他线程），这时候要将其替换成SpilledLookupSourceHandle ???
+             */
             finishMemoryRevoke = Optional.of(() -> {
                 lookupSourceFactory.setPartitionSpilledLookupSourceHandle(partitionIndex, spilledLookupSourceHandle);
                 lookupSourceNotNeeded = Optional.empty();
@@ -466,6 +482,10 @@ public class HashBuilderOperator
         return null;
     }
 
+    /**
+     * 通过{@link com.facebook.presto.operator.Driver#processInternal}可以知道，当上游Operator结束后，
+     * 如果本node没有结束（即{@link #isFinished()}为false），则{@link #finish()}将会被持续调用。
+     */
     @Override
     public void finish()
     {
@@ -567,6 +587,8 @@ public class HashBuilderOperator
         checkState(state == State.INPUT_SPILLED);
         if (!spilledLookupSourceHandle.getUnspillingRequested().isDone()) {
             // Nothing to do yet.
+            // 说明此时LookupSource还没有user请求过，因此可以不用着急进行unspill。
+            // 参考{@link SpilledLookupSourceHandle#getLookupSource()}
             return;
         }
 

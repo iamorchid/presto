@@ -188,12 +188,12 @@ class ClientBuffer
         PendingRead oldPendingRead = null;
         try {
             synchronized (this) {
-                // save off the old pending read so we can abort it out side of the lock
+                // save off the old pending read, so we can abort it outside the lock
                 oldPendingRead = this.pendingRead;
                 this.pendingRead = null;
 
                 // Return results immediately if we have data, there will be no more data, or this is
-                // an out of order request
+                // an out-of-order request
                 if (!pages.isEmpty() || noMorePages || sequenceId != currentSequenceId.get()) {
                     return immediateFuture(processRead(sequenceId, maxSize));
                 }
@@ -262,7 +262,7 @@ class ClientBuffer
     }
 
     /**
-     * If there no data, attempt to load some from the pages supplier.
+     * If there is no data, attempt to load some from the pages supplier.
      */
     private boolean loadPagesIfNecessary(PagesSupplier pagesSupplier, DataSize maxSize)
     {
@@ -281,7 +281,7 @@ class ClientBuffer
 
             // The page supplier has incremented the page reference count, and addPages below also increments
             // the reference count, so we need to drop the page supplier reference. The call dereferencePage
-            // is performed outside of synchronized to avoid making a callback while holding a lock.
+            // is performed outside synchronized to avoid making a callback while holding a lock.
             pageReferences = pagesSupplier.getPages(maxSize);
 
             // add the pages to this buffer, which will increase the reference count
@@ -414,7 +414,7 @@ class ClientBuffer
             // update memory tracking
             verify(bufferedBytes.addAndGet(-bytesRemoved) >= 0);
         }
-        // dereference outside of synchronized to avoid making a callback while holding a lock
+        // dereference outside synchronized to avoid making a callback while holding a lock
         dereferencePages(removedPages.build(), onPagesReleased);
     }
 

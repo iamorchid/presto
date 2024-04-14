@@ -24,6 +24,7 @@ import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
+import com.facebook.presto.sql.planner.SystemPartitioningHandle;
 
 import javax.annotation.concurrent.Immutable;
 
@@ -79,14 +80,28 @@ public class ExchangeNode
         }
     }
 
+    /**
+     * type描述了下游任务消费上游任务输出结果的方式，即结果exchange方式。
+     */
     private final Type type;
     private final Scope scope;
 
     private final List<PlanNode> sources;
 
+    /**
+     * {@link ExchangeNode} 承接了上游stage（output方）和下游stage（read方）的交互信息。{@link PartitioningScheme}则包含了
+     * 下游希望上游如何进行数据分发相关的信息，比如output结果对应到那个bucket（参见{@link SystemPartitioningHandle#function}）。
+     * 同时，这个也基本决定了下游的调度方式（见{@link SystemPartitioningHandle#getNodePartitionMap}），生成多少个任务。
+     *
+     * 其中，{@link PartitioningScheme#outputLayout}是下游stage预期的输入字段，{@link PartitioningScheme#bucketToPartition}
+     * 则是下游stage希望上游如何将结果对应到partitions，通常下游会为上游输出结果的每个partition创建一个消费任务。
+     */
     private final PartitioningScheme partitioningScheme;
 
     // for each source, the list of inputs corresponding to each output
+    /**
+     * 这个是{@link ExchangeNode}的输入字段，即上游stage的输出字段。这里的inputs和{@link #sources}是一一对应的。
+     */
     private final List<List<VariableReferenceExpression>> inputs;
 
     private final boolean ensureSourceOrdering;
@@ -204,6 +219,12 @@ public class ExchangeNode
                 scope,
                 partitioningScheme,
                 ImmutableList.of(child),
+                /**
+                 * [question] 这里为啥不实用child.getOutputVariables()？？怎么保证它一定包含partitioningScheme.getOutputLayout()？？
+                 *
+                 * [answer] {@link ExchangeNode}的构造函数会保证校验这一点。使用child.getOutputVariables()的话，则不能保证
+                 * 它和partitioningScheme.getOutputLayout()的长度是一致的。
+                 */
                 ImmutableList.of(partitioningScheme.getOutputLayout()),
                 false,
                 Optional.empty());

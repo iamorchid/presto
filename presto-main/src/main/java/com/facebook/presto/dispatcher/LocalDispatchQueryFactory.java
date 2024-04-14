@@ -113,7 +113,7 @@ public class LocalDispatchQueryFactory
      *  The event of creating the dispatch query is logged after registering to the query tracker which is used to keep track of the state of the query.
      *  The log is done by adding a state change listener to the query.
      *  The state transition listener is useful to understand the state when a query has moved from created to running, running to error completed.
-     *  Once dispatch query object is created and it's registered with the query tracker, start sending heard beat to indicate that this query is now running
+     *  Once dispatch query object is created and registered with the query tracker, start sending heartbeat to indicate that this query is now running
      *  to the {@link ResourceGroupManager}. This is no-op for no disaggregated coordinator setup
      *
      * @param session the session
@@ -164,6 +164,7 @@ public class LocalDispatchQueryFactory
                 throw new PrestoException(NOT_SUPPORTED, "Unsupported statement type: " + preparedQuery.getStatementClass().getSimpleName());
             }
 
+            // 这里创建QueryExecution时，会对query进行语义分析
             return queryExecutionFactory.createQueryExecution(analyzerProvider, preparedQuery, stateMachine, slug, retryCount, warningCollector, queryType);
         });
 
@@ -173,8 +174,8 @@ public class LocalDispatchQueryFactory
                 queryExecutionFuture,
                 clusterSizeMonitor,
                 executor,
-                queryQueuer,
-                queryManager::createQuery,
+                queryQueuer,               // queryQueuer
+                queryManager::createQuery, // querySubmitter
                 retryCount > 0,
                 queryPrerequisitesManager);
     }

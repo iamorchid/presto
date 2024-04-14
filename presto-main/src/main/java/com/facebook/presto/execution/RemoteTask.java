@@ -70,6 +70,11 @@ public interface RemoteTask
 
     void abort();
 
+    /**
+     * 下面partitioned split对应的其实就是TableScanNode的split，不包含RemoteSourceNode的split。
+     * 参考: {@link com.facebook.presto.execution.SqlTaskExecution}
+     */
+
     PartitionedSplitsInfo getPartitionedSplitsInfo();
 
     PartitionedSplitsInfo getQueuedPartitionedSplitsInfo();

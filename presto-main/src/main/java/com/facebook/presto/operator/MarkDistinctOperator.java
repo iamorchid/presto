@@ -159,6 +159,11 @@ public class MarkDistinctOperator
             return null;
         }
 
+        /**
+         * 由{@link com.facebook.presto.spi.plan.MarkDistinctNode#MarkDistinctNode}组装output的逻辑以及
+         * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#visitMarkDistinct}生
+         * 成output的layout可以知道，marker列需要作为output page的最后一个channel。
+         */
         // add the new boolean column to the page
         Page outputPage = inputPage.appendColumn(unfinishedWork.getResult());
 

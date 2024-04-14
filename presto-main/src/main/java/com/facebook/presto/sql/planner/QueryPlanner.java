@@ -210,7 +210,17 @@ class QueryPlanner
             if (!analysis.isAggregation(node)) {
                 // ORDER BY requires both output and source fields to be visible if there are no aggregations
                 builder = project(builder, outputs, fromRelationPlan);
+
+                /**
+                 * 下面的planBuilderFor会切换{@link RelationPlan}，这里将outputs替换为新plan的symbol引用。
+                 */
                 outputs = toSymbolReferences(computeOutputs(builder, outputs));
+
+                /**
+                 * 这里的操作主要是切换{@link PlanBuilder#translations}，更准确地说是切换{@link TranslationMap}
+                 * 中的{@link RelationPlan}，使之采用order by的{@link Scope}，这样可以解析order by中对select部
+                 * 分的字段引用。
+                 */
                 builder = planBuilderFor(builder, analysis.getScope(node.getOrderBy().get()));
             }
             else {
@@ -382,6 +392,9 @@ class QueryPlanner
 
         Assignments.Builder projections = Assignments.builder();
         for (Expression expression : expressions) {
+            /**
+             * 这里允许将上一级PlanNode输出 同时 暴露到新PlanNode的输出
+             */
             if (expression instanceof SymbolReference) {
                 VariableReferenceExpression variable = toVariableReference(variableAllocator, expression);
                 projections.put(variable, rowExpression(expression, sqlPlannerContext));
@@ -389,8 +402,28 @@ class QueryPlanner
                 continue;
             }
 
+            /**
+             * 这里的expression是新PlanNode输出，这里为他创建一个变量引用。
+             */
             VariableReferenceExpression variable = newVariable(variableAllocator, expression, analysis.getTypeWithCoercions(expression));
+
+            /**
+             * 这里是建立一种映射，将新{@link PlanNode}的输出(即VariableReferenceExpression)对应到上一级
+             * PlanNode输出的表达式，即{@link SymbolReference}相关的表达式，其中SymbolReference用于引用
+             * 上一级PlanNode的输出(即VariableReferenceExpression)。
+             *
+             * {@link PlanBuilder#rewrite(Expression)} 本质上是通过上一级PlanNode的scope(即定义原始输出
+             * 的{@link RelationPlan#scope})来定位 当前expression中的每个变量 所对应于 上一级PlanNode的
+             * field index，并用该index来定位上一级PlanNode的输出(即{@link RelationPlan#fieldMappings}
+             * 中的元素)。基于上一级PlanNode的输出来构建{@link SymbolReference}相关的表达式。
+             */
             projections.put(variable, rowExpression(subPlan.rewrite(expression), sqlPlannerContext));
+
+            /**
+             * 当前expression可以被下一级的PlanNode引用（比如通过expression的别名)，这里会将expression映射
+             * 为本PlanNode输出。这样下一级的PlanNode的输出，就可以解析为本PlanNode输出的表达式。可以同时参见
+             * 上面对{@link PlanBuilder#rewrite(Expression)}）说明。
+             */
             outputTranslations.put(expression, variable);
         }
 

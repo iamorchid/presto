@@ -318,6 +318,15 @@ public class TestLocalProperties
                 builder().grouped("a", "b", "c").build(),
                 Optional.empty());
 
+        // 输入可以是如下, 因此grouped("a", "b", "c"), 不能保证grouped("a", "b"),
+        // 因为r1, r2, r5, r6并不组成一个group(不连续).
+        //      a   b   c   d
+        // r1: (a1, b1, c1, d1)
+        // r2: (a1, b1, c1, d2)
+        // r3: (a2, b2, c2, d1)
+        // r4: (a2, b2, c2, d3)
+        // r5: (a1, b1, c2, d1)
+        // r6: (a1, b1, c3, d1)
         assertMatch(
                 actual,
                 builder().grouped("a", "b").build(),

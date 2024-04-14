@@ -66,6 +66,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
+import com.facebook.presto.execution.scheduler.SectionExecutionFactory;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -281,10 +283,31 @@ public abstract class BasePlanFragmenter
 
         PartitioningScheme partitioningScheme = exchange.getPartitioningScheme();
 
+        /**
+         * 基于{@link PartitioningScheme}设置当前{@link SubPlan}使用的{@link PartitioningHandle}，它主要决定当前SubPlan
+         * 如何调度splits（splitToBucket, bucketToNode, partitionToNode）以及child {@link SubPlan}如何输出结果对应到的
+         * partition（bucketToPartition），其中本SubPlan的每个任务会消费其中一个partition对应的输出。
+         * 参见：
+         * {@link com.facebook.presto.execution.scheduler.SectionExecutionFactory#createStreamingLinkedStageExecutions}
+         * {@link com.facebook.presto.sql.planner.NodePartitioningManager#getPartitionFunction}
+         *
+         * 对于上游stage（对应这里的child SubPlan)，{@link PartitioningScheme#partitioning}用于计算输出结果的bucket，结合
+         * 下游stage提供的bucketToPartition（SectionExecutionFactory#createStreamingLinkedStageExecutions会设置好），
+         * 上游stage的任务可以知道应该将每个结果对应到那个输出的partition上。
+         */
         setDistributionForExchange(exchange.getType(), partitioningScheme, context);
 
         ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
         for (int sourceIndex = 0; sourceIndex < exchange.getSources().size(); sourceIndex++) {
+            /**
+             * ExchangeNode可以从多个source获取输入{@link ExchangeNode#getInputs()}，不同source输出的schema列名称可以不一样，
+             * 但相同列号的列类型必须一样。同时，每个source的输出 都一一会映射到 {@link ExchangeNode#getOutputVariables()}，因
+             * 此ExchangeNode有点类似将多个source的输出进行normalization。
+             *
+             * {@link PartitioningScheme#hashColumn}以及{@link PartitioningScheme#partitioning#arguments}中的variable
+             * 都来自{@link ExchangeNode#getOutputVariables()}。这里需要将这些variable的引用替换为具体source的输出，便于后面
+             * subPlan调度后执行结果输出（即输出哪些channels）以及partition（每个position对应哪个output buffer）相关的操作。
+             */
             FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(exchange.getInputs().get(sourceIndex)));
             builder.add(buildSubPlan(exchange.getSources().get(sourceIndex), childProperties, context));
         }
@@ -300,9 +323,23 @@ public abstract class BasePlanFragmenter
         return new RemoteSourceNode(exchange.getSourceLocation(), exchange.getId(), exchange.getStatsEquivalentPlanNode(), childrenIds, exchange.getOutputVariables(), exchange.isEnsureSourceOrdering(), exchange.getOrderingScheme(), exchange.getType());
     }
 
+    /**
+     * [question] 为什么这个方法中没有考虑{@link ExchangeNode.Type#REPLICATE}的情况？？
+     *
+     * 对于REPLICATE情况，这说明当前处理的是join，具体的distribution将会由left table决定。通过{@link AddExchanges.Rewriter#visitJoin}
+     * 容易知道，此时join node和left table scan node之间没有exchange，它们的SubPlan使用的distribution将由{@link #visitTableScan}
+     * 来决定。
+     */
     protected void setDistributionForExchange(ExchangeNode.Type exchangeType, PartitioningScheme partitioningScheme, RewriteContext<FragmentProperties> context)
     {
         if (exchangeType == ExchangeNode.Type.GATHER) {
+            /**
+             * 因为下游stage（即当前正在构建中的{@link SubPlan}）采用GATHER的方式读取上游stage（即这里的child SubPlan)，
+             * 因此下游STAGE的执行只需要单个节点即可，也就是说，只需要一个任务。
+             *
+             * 注意：此时context中的FragmentProperties（即{@link RewriteContext#userContext}）不是给child SubPlan
+             * 使用的，而是给当前正在创建的SubPlan使用的。而child SubPlan会采用全新的FragmentProperties。
+             */
             context.get().setSingleNodeDistribution();
         }
         else if (exchangeType == ExchangeNode.Type.REPARTITION) {

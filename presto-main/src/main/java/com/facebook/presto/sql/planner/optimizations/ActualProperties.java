@@ -47,10 +47,64 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.transform;
 import static java.util.Objects.requireNonNull;
 
+import com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties;
+
+/**
+ * 这个class主要是被{@link AddExchanges}使用。AddExchanges会根据需要引入remote exchange，这个决定着任务级别
+ * 的并发（即由多少个机器节点来并行执行fragment）、上下游fragment之间数据交互的partitioning方式等。
+ *
+ * 而单个任务中的算子（即operator node）的并发度（即参与的pipeline的实例个数，即Driver个数，即StreamProperties
+ * 类描述下的stream个数）则由local exchange来控制。进一步，local exchange的引入则由{@link AddLocalExchanges}
+ * 来控制。
+ *
+ * 通过下面sort的说明可以知道，需要结果remote exchange和local exchange才能完整实现sort的逻辑。
+ *
+ * 需要理解同{@link StreamProperties}差异。
+ */
 public class ActualProperties
 {
+    /**
+     * 主要描述调度相关的数据partitioning信息，用于决定是否需要在operator node之间引入remote ExchangeNode。
+     * {@link Global}主要由TableScanNode以及ExchangeNode来决定。
+     *
+     * 参考：
+     * {@link com.facebook.presto.sql.planner.optimizations.PropertyDerivations.Visitor#visitTableScan}
+     * {@link com.facebook.presto.sql.planner.optimizations.PropertyDerivations.Visitor#visitExchange}
+     */
     private final Global global;
+
+    /**
+     * LocalProperty描述的是operator实例的输出特性（即它的stream的特性，亦即在单个Driver中operator的输出具有的特性）。
+     *
+     * 如果单个task内要进行并行的grouping和聚合计算，则需要保证多个stream之间按照grouping keys进行partitioning，即需要借助
+     * {@link StreamProperties.StreamDistribution#partitioningColumns}。进一步地，如果要采用多个tasks做并行grouping
+     * 计算，则还需要通过{@link Global#nodePartitioning}保证多个task之间处理的数据没有group交集。
+     *
+     * 如果要保证task级别的sorting，则需要保证operator采用{@link StreamProperties.StreamDistribution#SINGLE}，即只有
+     * 一个stream并发。进一步，如果要保证query级别的grouping或者sorting，则还需要保证operator只在单个机器节点上执行（即满足
+     * {@link #isSingleNode()}。
+     *
+     * 1) {@link com.facebook.presto.spi.GroupingProperty}表示operator的输出是分组的。如果要保证task之间的分组没有交集，
+     *    则调度时需要通过{@link Global#nodePartitioning}保证多个task之间处理的数据没有group交集。而要保证task中的stream
+     *    之间operator的分组输出没有交集，则需要在进行分组操作之前，通过StreamProperties的partitioningColumns保证stream之
+     *    间的数据没有交集。
+     *
+     * 2) {@link com.facebook.presto.spi.SortingProperty}表示operator的输出是排序的，如果要对读取数据的进行全局排序，则需
+     *    要借助GATHER类型的remote exchange（调度的时候，会保证GATHER类型的ExchangeNode只调度到-个节点上）以及SINGLE stream
+     *    类型的sort（即sort参与的pipeline只有一个Driver事例）。如果采用分布式排序，即开启了distributed_sort，则上游stage的任
+     *    务会先进行partial sort，然后再由下游再通过single stream的pipeline进行归并排序）。
+     *
+     *    代码参考：
+     *    {@link com.facebook.presto.sql.planner.BasePlanFragmenter#setDistributionForExchange}
+     *    {@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#visitSort}
+     *    {@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#visitSort}
+     *    {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#visitRemoteSource}
+     *
+     *    SQL参考：
+     *    sql-samples/sqls-sort-basic
+     */
     private final List<LocalProperty<VariableReferenceExpression>> localProperties;
+
     private final Map<VariableReferenceExpression, ConstantExpression> constants;
 
     private ActualProperties(
@@ -89,6 +143,7 @@ public class ActualProperties
     }
 
     /**
+     * 参考逻辑 {@link com.facebook.presto.sql.planner.SystemPartitioningHandle#getNodePartitionMap} 。
      * @return true if the plan will only execute on a single node
      */
     public boolean isSingleNode()
@@ -407,12 +462,12 @@ public class ActualProperties
 
         public static <T extends RowExpression, U extends RowExpression> Global partitionedOn(
                 PartitioningHandle nodePartitioningHandle,
-                List<T> nodePartitioning,
-                Optional<List<U>> streamPartitioning)
+                List<T> nodePartitioningColumns,
+                Optional<List<U>> streamPartitioningColumns)
         {
             return new Global(
-                    Optional.of(Partitioning.create(nodePartitioningHandle, nodePartitioning)),
-                    streamPartitioning.map(columns -> Partitioning.create(SOURCE_DISTRIBUTION, columns)),
+                    Optional.of(Partitioning.create(nodePartitioningHandle, nodePartitioningColumns)),
+                    streamPartitioningColumns.map(columns -> Partitioning.create(SOURCE_DISTRIBUTION, columns)),
                     false);
         }
 

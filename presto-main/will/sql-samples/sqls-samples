@@ -1,0 +1,242 @@
+select 
+  orderkey,
+  count(1) filter (where price > 100 and quantity > 10) as count,
+  array_agg(linenumber order by shipdate asc) filter (where orderkey <= 3) as items
+from lineitem 
+where orderkey < 10
+group by orderkey
+order by orderkey
+limit 10;
+
+
+select o.clerk as clerkName, count(item.linenumber) as items, sum(item.quantity) as quantities
+from orders as o, lineitem as item
+where o.orderkey = item.orderkey and o.orderdate = item.receiptdate and item.quantity > 0
+group by o.clerk 
+order by items desc 
+limit 10;
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PredicatePushDown
+
+select linenumber, count(*) as count
+from (select linenumber, quantity + 10 as q, price, receiptdate from lineitem)
+where linenumber < 10
+group by linenumber;
+
+Logical Plan
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[linenumber, count] => [linenumber:bigint, count:bigint]                                                                                                                                                                               
+     - RemoteStreamingExchange[GATHER] => [linenumber:bigint, count:bigint]                                                                                                                                                                     
+         - Aggregate(FINAL)[linenumber] => [linenumber:bigint, count:bigint]                                                                                                                                                                    
+                 count := "presto.default.count"((count_24)) (1:28)                                                                                                                                                                             
+             - LocalExchange[HASH][$hashvalue] (linenumber) => [linenumber:bigint, count_24:bigint, $hashvalue:bigint]                                                                                                                          
+                 - RemoteStreamingExchange[REPARTITION][$hashvalue_25] => [linenumber:bigint, count_24:bigint, $hashvalue_25:bigint]                                                                                                            
+                     - Project[projectLocality = LOCAL] => [linenumber:bigint, count_24:bigint, $hashvalue_26:bigint]                                                                                                                           
+                             $hashvalue_26 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(linenumber), BIGINT'0')) (4:10)                                                                                                              
+                         - Aggregate(PARTIAL)[linenumber] => [linenumber:bigint, count_24:bigint]                                                                                                                                               
+                                 count_24 := "presto.default.count"(*) (1:28)                                                                                                                                                                   
+                             - ScanFilter[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, filterPredicate = (linenumber) < (BIGINT'10')] => [linenumber:bigint] 
+                                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                           
+                                     linenumber := ExampleColumnHandle{connectorId=example, columnName=linenumber, columnType=bigint, ordinalPosition=3} (2:70)                                                                                 
+                                                                                                                                                                                                                                                
+(1 row)
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+explain
+select linenumber, sum(q) as sum, count(*) as count
+from (select linenumber, quantity + 10 as q, price, receiptdate from lineitem)
+where linenumber < 10
+group by linenumber;
+
+Logical Plan
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[linenumber, sum, count] => [linenumber:bigint, sum:double, count:bigint]                                                                                                                                                                                       
+     - RemoteStreamingExchange[GATHER] => [linenumber:bigint, sum:double, count:bigint]                                                                                                                                                                                  
+         - Aggregate(FINAL)[linenumber] => [linenumber:bigint, sum:double, count:bigint]                                                                                                                                                                                 
+                 sum := "presto.default.sum"((sum_28)) (2:20)                                                                                                                                                                                                            
+                 count := "presto.default.count"((count_29)) (2:35)                                                                                                                                                                                                      
+             - LocalExchange[HASH][$hashvalue] (linenumber) => [linenumber:bigint, count_29:bigint, sum_28:double, $hashvalue:bigint]                                                                                                                                    
+                 - RemoteStreamingExchange[REPARTITION][$hashvalue_30] => [linenumber:bigint, count_29:bigint, sum_28:double, $hashvalue_30:bigint]                                                                                                                      
+                     - Project[projectLocality = LOCAL] => [linenumber:bigint, count_29:bigint, sum_28:double, $hashvalue_31:bigint] 
+                             // hash预计算下推到这里即可，Aggregate(PARTIAL) 可以直接利用 linenumber:bigint，聚合时无需额外计算hash                                                                                                                               
+                             $hashvalue_31 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(linenumber), BIGINT'0')) (5:10)                                                                                                                                       
+                         - Aggregate(PARTIAL)[linenumber] => [linenumber:bigint, count_29:bigint, sum_28:double]                                                                                                                                                         
+                                 count_29 := "presto.default.count"(*) (2:35)                                                                                                                                                                                            
+                                 sum_28 := "presto.default.sum"((expr)) (2:20)                                                                                                                                                                                           
+                             - ScanFilterProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, filterPredicate = (linenumber) < (BIGINT'10'), projectLocality = LOCAL] => [linenumber:b
+                                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                 
+                                     expr := (quantity) + (DOUBLE'10.0') (3:72)                                                                                                                                                                                          
+                                     linenumber := ExampleColumnHandle{connectorId=example, columnName=linenumber, columnType=bigint, ordinalPosition=3} (3:70)                                                                                                          
+                                     quantity := ExampleColumnHandle{connectorId=example, columnName=quantity, columnType=double, ordinalPosition=4} (3:70)                                                                                                              
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+explain 
+select orderkey, linenumber, sum(quantity) as sum, count(*) as count
+from lineitem
+where linenumber < 10
+group by 
+  grouping sets ((), (orderkey), (orderkey, linenumber)),
+  grouping sets ((), ());
+
+// UnaliasSymbolReferences (canonicalize projection alis)
+// [rule] RemoveRedundantIdentityProjections (移除仅仅进行alias的projections)
+// StatsRecordingPlanOptimizer -> AddExchanges (add RemoteStreamingExchange)
+// AddLocalExchanges (add LocalExchange)
+// [rule] PushPartialAggregationThroughExchange (split Aggregate into Final && PARTIAL)
+// [rule] PushPartialAggregationThroughExchange (主要逻辑: pushPartial, push partial agg through LocalExchange)
+// [rule] PushPartialAggregationThroughExchange (push partial agg through RemoteStreamingExchange)
+// [rule] RemoveRedundantIdentityProjections (remove un-necessary projects introduced by pushing partial agg)
+// HashGenerationOptimizer (主要逻辑: visitExchange, introduce precomputed hashvalue projection)
+
+Logical Plan
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, linenumber, sum, count] => [orderkey$gid:bigint, linenumber$gid:bigint, sum:double, count:bigint]                                                                                                                                                    
+         orderkey := orderkey$gid (2:8)                                                                                                                                                                                                                                  
+         linenumber := linenumber$gid (2:18)                                                                                                                                                                                                                             
+     - RemoteStreamingExchange[GATHER] => [orderkey$gid:bigint, linenumber$gid:bigint, sum:double, count:bigint]                                                                                                                                                         
+         - Project[projectLocality = LOCAL] => [orderkey$gid:bigint, linenumber$gid:bigint, sum:double, count:bigint] // 去掉groupId                                                                                                                                                    
+             - Aggregate(FINAL)[orderkey$gid, linenumber$gid, groupid][$hashvalue] => [orderkey$gid:bigint, linenumber$gid:bigint, groupid:bigint, $hashvalue:bigint, count:bigint, sum:double]                                                                          
+                     count := "presto.default.count"((count_19)) (2:52)                                                                                                                                                                                                  
+                     sum := "presto.default.sum"((sum_18)) (2:30)                                                                                                                                                                                                        
+                 - LocalExchange[HASH][$hashvalue] (orderkey$gid, linenumber$gid, groupid) => [orderkey$gid:bigint, linenumber$gid:bigint, groupid:bigint, count_19:bigint, sum_18:double, $hashvalue:bigint]                                                            
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_20] => [orderkey$gid:bigint, linenumber$gid:bigint, groupid:bigint, count_19:bigint, sum_18:double, $hashvalue_20:bigint]                                                                         
+                         - Aggregate(PARTIAL)[orderkey$gid, linenumber$gid, groupid][$hashvalue_21] => [orderkey$gid:bigint, linenumber$gid:bigint, groupid:bigint, $hashvalue_21:bigint, count_19:bigint, sum_18:double]                                                
+                                 count_19 := "presto.default.count"(*) (2:52)                                                                                                                                                                                            
+                                 sum_18 := "presto.default.sum"((quantity)) (2:30)                                                                                                                                                                                       
+                             - Project[projectLocality = LOCAL] => [orderkey$gid:bigint, linenumber$gid:bigint, quantity:double, groupid:bigint, $hashvalue_21:bigint]                                                                                                   
+                                     // hash预计算需要下推到 Aggregate(PARTIAL) 下面，因为group by使用的是字段组合 （aggregate 无法避免计算hash值）
+                                     $hashvalue_21 := combine_hash(combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey$gid), BIGINT'0')), COALESCE($operator$hash_code(linenumber$gid), BIGINT'0')), COALESCE($operator$hash_code(groupid), BIGINT
+                                 - GroupId[[], [], [orderkey], [orderkey], [orderkey, linenumber], [orderkey, linenumber]] => [orderkey$gid:bigint, linenumber$gid:bigint, quantity:double, groupid:bigint]                                                              
+                                         orderkey$gid := orderkey (6:23)                                                                                                                                                                                                 
+                                         linenumber$gid := linenumber (6:45)                                                                                                                                                                                             
+                                     - ScanFilter[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, filterPredicate = (linenumber) < (BIGINT'10')] => [orderkey:bigint, linenumber:bigint, 
+                                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                            
+                                             quantity := ExampleColumnHandle{connectorId=example, columnName=quantity, columnType=double, ordinalPosition=4} (3:6)                                                                                                       
+                                             linenumber := ExampleColumnHandle{connectorId=example, columnName=linenumber, columnType=bigint, ordinalPosition=3} (3:6)                                                                                                   
+                                             orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (3:6)                                                                                                       
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+explain 
+select orderkey, linenumber, linestatus, sum(quantity) as sum, count(*) as count
+from lineitem
+where linenumber < 10
+group by 
+  grouping sets ((orderkey), (orderkey, linenumber)),
+  rollup (linestatus);
+
+Logical Plan
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, linenumber, linestatus, sum, count] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, sum:double, count:bigint]                                                                                                                
+         orderkey := orderkey$gid (2:8)                                                                                                                                                                                                                                  
+         linenumber := linenumber$gid (2:18)                                                                                                                                                                                                                             
+         linestatus := linestatus$gid (2:30)                                                                                                                                                                                                                             
+     - RemoteStreamingExchange[GATHER] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, sum:double, count:bigint]                                                                                                                                 
+         - Project[projectLocality = LOCAL] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, sum:double, count:bigint]  // 去掉groupId                                                                                                                          
+             - Aggregate(FINAL)[orderkey$gid, linenumber$gid, linestatus$gid, groupid][$hashvalue] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, groupid:bigint, $hashvalue:bigint, count:bigint, sum:double]                                  
+                     count := "presto.default.count"((count_24)) (2:64)                                                                                                                                                                                                  
+                     sum := "presto.default.sum"((sum_23)) (2:42)                                                                                                                                                                                                        
+                 - LocalExchange[HASH][$hashvalue] (orderkey$gid, linenumber$gid, linestatus$gid, groupid) => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, groupid:bigint, sum_23:double, count_24:bigint, $hashvalue:bigint]                    
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_25] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, groupid:bigint, sum_23:double, count_24:bigint, $hashvalue_25:bigint]                                                 
+                         - Aggregate(PARTIAL)[orderkey$gid, linenumber$gid, linestatus$gid, groupid][$hashvalue_26] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, groupid:bigint, $hashvalue_26:bigint, sum_23:double, count_24:bigint]        
+                                 sum_23 := "presto.default.sum"((quantity)) (2:42)                                                                                                                                                                                       
+                                 count_24 := "presto.default.count"(*) (2:64)                                                                                                                                                                                            
+                             - Project[projectLocality = LOCAL] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, quantity:double, groupid:bigint, $hashvalue_26:bigint]                                                                           
+                                     $hashvalue_26 := combine_hash(combine_hash(combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey$gid), BIGINT'0')), COALESCE($operator$hash_code(linenumber$gid), BIGINT'0')), COALESCE($operator$hash_code(lin
+                                 - GroupId[[orderkey], [orderkey, linenumber], [linestatus, orderkey], [linestatus, orderkey, linenumber]] => [orderkey$gid:bigint, linenumber$gid:bigint, linestatus$gid:varchar, quantity:double, groupid:bigint]                      
+                                         orderkey$gid := orderkey (6:19)                                                                                                                                                                                                 
+                                         linenumber$gid := linenumber (6:41)                                                                                                                                                                                             
+                                         linestatus$gid := linestatus (7:11)                                                                                                                                                                                             
+                                     - ScanFilter[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, filterPredicate = (linenumber) < (BIGINT'10')] => [orderkey:bigint, linenumber:bigint, 
+                                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                            
+                                             quantity := ExampleColumnHandle{connectorId=example, columnName=quantity, columnType=double, ordinalPosition=4} (3:6)                                                                                                       
+                                             linestatus := ExampleColumnHandle{connectorId=example, columnName=linestatus, columnType=varchar, ordinalPosition=9} (3:6)                                                                                                  
+                                             linenumber := ExampleColumnHandle{connectorId=example, columnName=linenumber, columnType=bigint, ordinalPosition=3} (3:6)                                                                                                   
+                                             orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (3:6)                                                                                                       
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+// PruneProjectColumns
+// PruneFilterColumns
+// PruneTableScanColumns
+// UnaliasSymbolReferences
+// RemoveRedundantIdentityProjections
+// StatsRecordingPlanOptimizer -> com.facebook.presto.sql.planner.optimizations.AddExchanges
+select linenumber as lineId,  quantity, price * 1.2 as price1, price * 1.2 as price2, receiptdate 
+from lineitem
+where price > 20;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[lineId, quantity, price1, price2, receiptdate] => [linenumber:bigint, quantity:double, expr_2:double, expr_2:double, receiptdate:varchar]                                                                                                                      
+         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                                                      
+         lineId := linenumber (1:16)                                                                                                                                                                                                                                     
+         price1 := expr_2 (1:55)                                                                                                                                                                                                                                         
+         price2 := expr_2 (1:78)                                                                                                                                                                                                                                         
+     - RemoteStreamingExchange[GATHER] => [linenumber:bigint, quantity:double, expr_2:double, receiptdate:varchar]                                                                                                                                                       
+             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                                                  
+         - ScanFilterProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, filterPredicate = (price) > (DOUBLE'20.0'), projectLocality = LOCAL] => [linenumber:bigint, quantity:double,
+                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                     
+                 expr_2 := (price) * (DOUBLE'1.2') (2:8)                                                                                                                                                                                                                 
+                 receiptdate := ExampleColumnHandle{connectorId=example, columnName=receiptdate, columnType=varchar, ordinalPosition=12} (2:6)                                                                                                                           
+                 linenumber := ExampleColumnHandle{connectorId=example, columnName=linenumber, columnType=bigint, ordinalPosition=3} (2:6)                                                                                                                               
+                 quantity := ExampleColumnHandle{connectorId=example, columnName=quantity, columnType=double, ordinalPosition=4} (2:6)                                                                                                                                   
+                 price := ExampleColumnHandle{connectorId=example, columnName=price, columnType=double, ordinalPosition=5} (2:6)                                                                                                                                         
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+
+explain (type distributed)
+select linenumber as lineId,  quantity, price * 1.2 as price1, price * 1.2 as price2, receiptdate 
+from lineitem
+where price > 20;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                                     
+     Output layout: [linenumber, quantity, expr_2, expr_2, receiptdate]                                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                                                                      
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                       
+     - Output[lineId, quantity, price1, price2, receiptdate] => [linenumber:bigint, quantity:double, expr_2:double, expr_2:double, receiptdate:varchar]                                                                                                                  
+             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                                                  
+             lineId := linenumber (1:35)                                                                                                                                                                                                                                 
+             price1 := expr_2 (1:73)                                                                                                                                                                                                                                     
+             price2 := expr_2 (1:96)                                                                                                                                                                                                                                     
+         - RemoteSource[1] => [linenumber:bigint, quantity:double, expr_2:double, receiptdate:varchar]                                                                                                                                                                   
+
+ // See: https://prestodb.io/docs/current/sql/explain.html
+ // SOURCE: Fragment is executed on nodes where input splits are accessed.
+ // fragment的类型由依赖的RemoteStreamingExchange类型决定：
+ //   AddLocalExchanges#visitTopN (生成ExchangeNode)
+ //    -> AddLocalExchanges#planAndEnforceChildren 
+ //      -> AddLocalExchanges#planAndEnforce
+ //        -> AddLocalExchanges#enforce
+ //   PlanFragmenter$Fragmenter#createRemoteStreamingExchange (处理到ExchangeNode，便会递归调用)
+ //   PlanFragmenter$Fragmenter#visitTableScan (设置SOURCE_DISTRIBUTION)                                                                                                                                                                                                                                                          
+ Fragment 1 [SOURCE]                                                                                                                                                                                                                                                     
+     Output layout: [linenumber, quantity, expr_2, receiptdate]                                                                                                                                                                                                          
+     Output partitioning: SINGLE []                                                                                                                                                                                                                                      
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                       
+     - ScanFilterProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, grouped = false, filterPredicate = (price) > (DOUBLE'20.0'), projectLocality = LOCAL] => [linenumber:bigint, qua
+             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                         
+             expr_2 := (price) * (DOUBLE'1.2') (1:132)                                                                                                                                                                                                                   
+             quantity := ExampleColumnHandle{connectorId=example, columnName=quantity, columnType=double, ordinalPosition=4} (1:130)                                                                                                                                     
+             receiptdate := ExampleColumnHandle{connectorId=example, columnName=receiptdate, columnType=varchar, ordinalPosition=12} (1:130)                                                                                                                             
+             linenumber := ExampleColumnHandle{connectorId=example, columnName=linenumber, columnType=bigint, ordinalPosition=3} (1:130)                                                                                                                                 
+             price := ExampleColumnHandle{connectorId=example, columnName=price, columnType=double, ordinalPosition=5} (1:130)                                                                                                                                           
+                                                                                                                               

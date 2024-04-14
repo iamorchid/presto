@@ -383,6 +383,26 @@ public final class HttpRemoteTask
                     connectorTypeSerdeManager,
                     thriftProtocol);
 
+            /**
+             * 通过下面的callback知道，HttpRemoteTask主要依赖于taskStatusFetcher来管理内部信息的实时更新。
+             *
+             * {@link #sendUpdate()}的response中会返回taskInfo，会用于同时更新taskStatusFetcher和taskInfoFetcher。
+             *
+             * taskStatusFetcher会不断的拉取task的最新status（获取response后，会立即发送下一次请求），但并非采用busy轮训的方式。拉
+             * 取状态请求会定义一个等待状态变更的最大时间（即statusRefreshMaxWait），默认为1s。
+             *
+             * taskInfoFetcher则会周期性拉取最新的taskInfo（调度周期为100ms，但真正进行RPC的周期由infoUpdateInterval控制，默认
+             * 为3s）。同时，也可以为taskInfoFetcher请求定义等待状态变更的最大时间，默认为0。
+             *
+             * 参见：
+             * {@link com.facebook.presto.execution.TaskManagerConfig#statusRefreshMaxWait}
+             * {@link com.facebook.presto.execution.TaskManagerConfig#infoUpdateInterval}
+             * {@link com.facebook.presto.execution.TaskManagerConfig#infoRefreshMaxWait}
+             */
+            /**
+             * 当taskStatusFetcher状态变为done时，并不意味着taskInfoFetcher也变为done（即coordinator上的TaskInfo信息并不能
+             * 反应worker端的真实情况）。正常情况下，需要在cleanup请求完成后，使用它的response作为final TaskInfo。
+             */
             taskStatusFetcher.addStateChangeListener(newStatus -> {
                 TaskState state = newStatus.getState();
                 if (state.isDone()) {
@@ -462,6 +482,7 @@ public final class HttpRemoteTask
             int added = 0;
             long addedWeight = 0;
             for (Split split : splits) {
+                // 这里肯定总为true，不可能存在保存相同sourceId和ScheduledSplit的情况
                 if (pendingSplits.put(sourceId, new ScheduledSplit(nextSplitId.getAndIncrement(), sourceId, split))) {
                     if (isTableScanSource) {
                         added++;
@@ -739,11 +760,12 @@ public final class HttpRemoteTask
                 pendingSourceSplitsWeight -= removedWeight;
             }
         }
-        // Update stats before split queue space to ensure node stats are up to date before waking up the scheduler
+        // Update stats before split queue space to ensure node stats are up-to-date before waking up the scheduler
         updateTaskStats();
         updateSplitQueueSpace();
     }
 
+    // cleanup请求的callback
     private void onSuccessTaskInfo(TaskInfo result)
     {
         try {
@@ -783,9 +805,30 @@ public final class HttpRemoteTask
 
         // Since this TaskInfo is updated in the client the "complete" flag will not be set,
         // indicating that the stats may not reflect the final stats on the worker.
+        /**
+         * 由{@link #HttpRemoteTask}注册的taskStatusFetcher回调知道，{@link #taskStatusFetcher}的state变为done，
+         * 会触发{@link #cleanUpTask()}操作。但如果cleanup请求无法发送成功时，{@link #taskInfoFetcher}的taskInfo
+         * 的状态将无法transition到done，而系统中有些逻辑依赖于这个，因此这里需要强制将taskInfo的状态设置为done。虽然它
+         * 的状态设置成了done，但taskInfo的信息不能反应worker端的真实情况。
+         *
+         * 参考：
+         * {@link com.facebook.presto.execution.StageExecutionInfo#isFinal()} 决定了是否能够设置query的final
+         * QueryInfo，见{@link com.facebook.presto.execution.QueryStateMachine#updateQueryInfo}。
+         */
+        /**
+         * [question]
+         * 对于task正常结束或者abort情况，{@link #taskStatusFetcher}的status状态会置为done，但对于{@link #cancel()}
+         * 的情况（对应于cancel特定的stage，而不是整个query。cancel整个query，会触发{@link #abort()}），则不会。因此，
+         * cleanup请求发送失败的情况下，{@link #cleanUpLocally()}也无法将taskInfo的状态置为done。
+         *
+         * 参考：
+         * {@link com.facebook.presto.execution.SqlQueryExecution#cancelStage}
+         * {@link com.facebook.presto.execution.SqlQueryExecution#cancelQuery()}
+         */
         updateTaskInfo(getTaskInfo().withTaskStatus(getTaskStatus()), taskInfoThriftTransportEnabled);
     }
 
+    // cleanup请求的callback
     private void onFailureTaskInfo(
             Throwable t,
             String action,
@@ -965,6 +1008,15 @@ public final class HttpRemoteTask
 
         // The remote task is likely to get a delete from the PageBufferClient first.
         // We send an additional delete anyway to get the final TaskInfo
+        /**
+         * PageBufferClient在消费完数据后，进行的rpc该是{@link com.facebook.presto.server.TaskResource#abortResults}，
+         * 而不是{@link com.facebook.presto.server.TaskResource#deleteTask}，它是当前方法要进行的工作。
+         *
+         * 下面的uri类似于：// http://192.168.1.4:8080/v1/task/20230924_125705_00006_4w868.1.0.0.0
+         *
+         * 对于已经done的任务，它的信息并不会立刻删除，而是会保留一段时间，具体参考：
+         * {@link com.facebook.presto.execution.SqlTaskManager#removeOldTasks()}
+         */
         HttpUriBuilder uriBuilder = getHttpUriBuilder(getTaskStatus());
         Request.Builder requestBuilder = setContentTypeHeaders(binaryTransportEnabled, prepareDelete());
         if (taskInfoThriftTransportEnabled) {
@@ -992,9 +1044,18 @@ public final class HttpRemoteTask
         checkState(status.getState().isDone(), "cannot abort task with an incomplete status");
 
         try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
+            /**
+             * 这里的状态变更会触发对应的listener，进而触发{@link #cleanUpTask()}函数的调用。不确定这个操作是否
+             * 必要，因为进行abort rpc操作后，通过它的response也能获取预期的状态（再不济，taskStatusFetcher周期
+             * 性轮训也能拉取abort后的状态）。不过，下面的操作可以更及时地设置本地task的状态，让其他相关操作可以感知
+             * 到当前task已经失败而不用继续执行，比如{@link #sendUpdate()}。
+             */
             taskStatusFetcher.updateTaskStatus(status);
 
             // send abort to task
+            /**
+             * 下面的uri类似于：// http://192.168.1.4:8080/v1/task/20230924_125525_00005_4w868.0.0.0.0
+             */
             HttpUriBuilder uriBuilder = getHttpUriBuilder(getTaskStatus());
             Request.Builder builder = setContentTypeHeaders(binaryTransportEnabled, prepareDelete());
             if (taskInfoThriftTransportEnabled) {
@@ -1120,6 +1181,11 @@ public final class HttpRemoteTask
             }
         }
 
+        /**
+         * 下面的异常由本地产生，比如网络原因、发送队列满等。对于远端执行的任务，其抛出的异常不会引起coordinator本地产生异常，但会
+         * 反应到任务状态上（即{@link TaskState#FAILED}），它通过{@link #taskInfoFetcher}，{@link #taskStatusFetcher}
+         * 以及{@link #sendUpdate()}反馈到coordinator这边。
+         */
         @Override
         public void failed(Throwable cause)
         {
@@ -1179,6 +1245,7 @@ public final class HttpRemoteTask
         }
     }
 
+    // cleanup请求的callback
     private class ThriftResponseFutureCallback
             implements FutureCallback<ThriftResponse<TaskInfo>>
     {
@@ -1206,6 +1273,7 @@ public final class HttpRemoteTask
         }
     }
 
+    // cleanup请求的callback
     private class BaseResponseFutureCallback
             implements FutureCallback<BaseResponse<TaskInfo>>
     {

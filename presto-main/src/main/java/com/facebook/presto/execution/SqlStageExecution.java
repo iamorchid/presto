@@ -18,6 +18,7 @@ import com.facebook.presto.common.ErrorCode;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.buffer.OutputBuffers;
 import com.facebook.presto.execution.scheduler.SplitSchedulerStats;
+import com.facebook.presto.execution.scheduler.StageLinkage;
 import com.facebook.presto.execution.scheduler.TableWriteInfo;
 import com.facebook.presto.failureDetector.FailureDetector;
 import com.facebook.presto.metadata.InternalNode;
@@ -367,6 +368,10 @@ public final class SqlStageExecution
                 .collect(toImmutableList());
     }
 
+    /**
+     * 这里主要是处理child stage新产生tasks的情况，需要通知本stage已有的tasks去处理它们的输出。
+     * 参考{@link StageLinkage#processScheduleResults}
+     */
     public synchronized void addExchangeLocations(PlanFragmentId fragmentId, Set<RemoteTask> sourceTasks, boolean noMoreExchangeLocations)
     {
         requireNonNull(fragmentId, "fragmentId is null");
@@ -380,7 +385,13 @@ public final class SqlStageExecution
         for (RemoteTask task : getAllTasks()) {
             ImmutableMultimap.Builder<PlanNodeId, Split> newSplits = ImmutableMultimap.builder();
             for (RemoteTask sourceTask : sourceTasks) {
-                TaskStatus sourceTaskStatus = sourceTask.getTaskStatus();
+                /**
+                 * sourceTasks 中的每个task 会为 本stage中的每个task 产生一个输出（source task的输出通过本stage
+                 * tage的id来区分）。split的location形式如下所示，其中 192.168.1.7 为source task所在的worker节
+                 * 点，20221119_022459_00010_cdbxc.1.0.0 为source task的id，0 为本stage task的id。
+                 *
+                 * http://192.168.1.7:8080/v1/task/20221119_022459_00010_cdbxc.1.0.0/results/0
+                 */
                 newSplits.put(remoteSource.getId(), createRemoteSplitFor(task.getTaskId(), sourceTask.getRemoteTaskLocation(), sourceTask.getTaskId()));
             }
             task.addSplits(newSplits.build());
@@ -399,6 +410,10 @@ public final class SqlStageExecution
         }
     }
 
+    /**
+     * 这里主要是处理parent stage新产生tasks的情况，需要通知本stage的tasks准备好相应的输出。
+     * 参考{@link StageLinkage#processScheduleResults}
+     */
     public synchronized void setOutputBuffers(OutputBuffers outputBuffers)
     {
         requireNonNull(outputBuffers, "outputBuffers is null");
@@ -455,6 +470,22 @@ public final class SqlStageExecution
         if (stateMachine.getState().isDone()) {
             return Optional.empty();
         }
+
+        /**
+         * 对于需要调度split的stage，可以分为两种情况：
+         *
+         * 1) 只包含TableScanNode，而不包含RemoteSourceNode
+         * 对于这种stage，它不存在上游stage（即它不会从其他stage的output去消费数据），因此它没有必要指定partition来调度task（partition的主要目的，是告
+         * 诉本stage的task应该从上游stage的task的那个output buffer去消费数据）。这种情况下，是不会调用这个方法的，而仅仅调用{@link #scheduleSplits}。
+         *
+         * 2) 既包含TableScanNode，又包含RemoteSourceNode
+         * 这种情况下，TableScanNode对应的connector肯定定义了自己的{@link com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider}。
+         * 因为需要保证TableScanNode的split调度到的节点、节点消费的partition以及RemoteSourceNode输出数据对应的partition的一致性，需要先确认这些它们的对应
+         * 关系，然后再调度splits，参考{@link com.facebook.presto.execution.scheduler.FixedSourcePartitionedScheduler#schedule()}。
+         *
+         * 因此，对于情况2)，将会先调用{@link #scheduleTask}，再调用{@link #scheduleSplits}。
+         *
+         */
         checkState(!splitsScheduled.get(), "scheduleTask can not be called once splits have been scheduled");
         return Optional.of(scheduleTask(node, new TaskId(stateMachine.getStageExecutionId(), partition, DEFAULT_TASK_ATTEMPT_NUMBER), ImmutableMultimap.of()));
     }
@@ -471,6 +502,7 @@ public final class SqlStageExecution
 
         checkArgument(planFragment.getTableScanSchedulingOrder().containsAll(splits.keySet()), "Invalid splits");
 
+        // 可以看到，对于一个stage而言，每个node上最多只会启动一个处理source split的任务（这些split可以来自多个不同的table）
         ImmutableSet.Builder<RemoteTask> newTasks = ImmutableSet.builder();
         Collection<RemoteTask> tasks = this.tasks.get(node);
         RemoteTask task;
@@ -488,8 +520,8 @@ public final class SqlStageExecution
         if (noMoreSplitsNotification.size() > 1) {
             // The assumption that `noMoreSplitsNotification.size() <= 1` currently holds.
             // If this assumption no longer holds, we should consider calling task.noMoreSplits with multiple entries in one shot.
-            // These kind of methods can be expensive since they are grabbing locks and/or sending HTTP requests on change.
-            throw new UnsupportedOperationException("This assumption no longer holds: noMoreSplitsNotification.size() < 1");
+            // This kind of methods can be expensive since they are grabbing locks and/or sending HTTP requests on change.
+            throw new UnsupportedOperationException("This assumption no longer holds: noMoreSplitsNotification.size() <= 1");
         }
         for (Entry<PlanNodeId, Lifespan> entry : noMoreSplitsNotification.entries()) {
             task.noMoreSplits(entry.getKey(), entry.getValue());
@@ -504,8 +536,13 @@ public final class SqlStageExecution
         ImmutableMultimap.Builder<PlanNodeId, Split> initialSplits = ImmutableMultimap.builder();
         initialSplits.putAll(sourceSplits);
 
+        // 读取上游stage中各个task的输出
         sourceTasks.forEach((planNodeId, task) -> {
             TaskStatus status = task.getTaskStatus();
+            /**
+             * 消费端都还未开始读取source task的输出，source task怎么可能会变为TaskState.FINISHED ?
+             * 另外，这里更应该考虑下{@link TaskState#CANCELED} ?
+             */
             if (status.getState() != TaskState.FINISHED) {
                 initialSplits.put(planNodeId, createRemoteSplitFor(taskId, task.getRemoteTaskLocation(), task.getTaskId()));
             }
@@ -530,9 +567,21 @@ public final class SqlStageExecution
         allTasks.add(taskId);
         runningTasks.add(taskId);
 
+        // tasks仅仅是统计本stage相关的node上的任务信息
         tasks.computeIfAbsent(node, key -> newConcurrentHashSet()).add(task);
+        // nodeTaskMap用于统计node上全局的任务信息
         nodeTaskMap.addTask(node, task);
 
+        /**
+         * task的state变为done，表明task已经结束了，但coordinator端持有的taskInfo并不是终态，因为task的
+         * status和taskInfo是由不同的fetcher维护的。当task的status变为done后，需要进行cleanup请求后，才
+         * 能保证taskInfo才能是终态的。因此，task的status变为done到task的taskInfo反应worker端的终态，之
+         * 间可能会存在短暂的间隔。
+         *
+         * 参考:
+         * {@link com.facebook.presto.server.remotetask.HttpRemoteTask#taskStatusFetcher}
+         * {@link com.facebook.presto.server.remotetask.HttpRemoteTask#taskInfoFetcher}
+         */
         task.addStateChangeListener(new StageTaskListener(taskId));
         task.addFinalTaskInfoListener(this::updateFinalTaskInfo);
 

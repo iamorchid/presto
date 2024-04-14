@@ -26,6 +26,14 @@ import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.succinctBytes;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
+/**
+ * 这里定义的限制是从整个集群来看的，比如单个query使用的集群总user memory不得超过20G，
+ * user memory + system memory不得超过40G。另外，这里没有对revocable memory以及
+ * spill space的限制，它们的限制由node自己控制。
+ * 参考：
+ * {@link com.facebook.presto.spiller.NodeSpillConfig}
+ * {@link com.facebook.presto.memory.NodeMemoryConfig}
+ */
 @DefunctConfig({
         "experimental.cluster-memory-manager-enabled",
         "query.low-memory-killer.enabled"})

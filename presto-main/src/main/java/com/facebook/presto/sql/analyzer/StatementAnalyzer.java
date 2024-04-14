@@ -1658,6 +1658,10 @@ class StatementAnalyzer
             analyzeGroupingOperations(node, sourceExpressions, orderByExpressions);
             List<FunctionCall> aggregates = analyzeAggregations(node, sourceExpressions, orderByExpressions);
 
+            // 1) [Valid]    select count(*) from Orders
+            // 2) [Valid]    select count(*) from Orders order by sum(TotalPrice)
+            // 3) [NotValid] select orderKey from Orders order by sum(TotalPrice)
+            // 4) [NotValid] select count(*) from Orders order by TotalPrice
             if (!aggregates.isEmpty() && groupByExpressions.isEmpty()) {
                 // Have Aggregation functions but no explicit GROUP BY clause
                 analysis.setGroupByExpressions(node, ImmutableList.of());

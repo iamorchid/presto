@@ -1,0 +1,103 @@
+## SqlTask状态处理
+
+class SqlTask
+{
+    private void initialize(Function<SqlTask, ?> onDone, CounterStat failedTasks)
+    {
+        taskStateMachine.addStateChangeListener(new StateChangeListener<TaskState>()
+        {
+               if (!newState.isDone()) {
+                    return;
+                }
+                // ...
+
+                // make sure buffers are cleaned up
+                if (newState == FAILED || newState == ABORTED) {
+                    // don't close buffers for a failed query
+                    // closed buffers signal to upstream tasks that everything finished cleanly
+                    outputBuffer.fail();
+                }
+                else {
+                    outputBuffer.destroy();
+                }
+
+                // ...
+        }
+    }
+}
+
+
+class SqlTaskExecution
+{
+    private static TaskHandle createTaskHandle(...)
+    {
+        // ....
+        taskStateMachine.addStateChangeListener(state -> {
+            if (state.isDone()) {
+                taskExecutor.removeTask(taskHandle);
+                for (DriverFactory factory : localExecutionPlan.getDriverFactories()) {
+                    factory.noMoreDrivers();
+                }
+            }
+        });
+        return taskHandle;
+    }
+}
+
+
+## SqlTask成功 (FINISHED)
+class SqlTaskExecution
+{
+    private synchronized void checkTaskCompletion()
+    {
+        // ...
+        taskStateMachine.finished();
+    }
+}
+
+
+## 取消SqlTask (CANCELED)
+SqlTask#cancel
+    -> taskStateMachine.cancel()
+
+SqlTaskExecution#createTaskHandle {
+    taskStateMachine.addStateChangeListener(state -> {
+        if (state.isDone()) {
+            taskExecutor.removeTask(taskHandle);
+            for (DriverFactory factory : localExecutionPlan.getDriverFactories()) {
+                factory.noMoreDrivers();
+            }
+        }
+    });
+}
+
+TaskExecutor#removeTask {
+   try (SetThreadName ignored = new SetThreadName("Task-%s", taskHandle.getTaskId())) {
+        doRemoveTask(taskHandle);
+    }
+}
+
+TaskExecutor#doRemoveTask {
+    List<PrioritizedSplitRunner> splits;
+    synchronized (this) {
+        tasks.remove(taskHandle);
+        splits = taskHandle.destroy();
+        // ....
+    }
+
+    // call destroy outside of synchronized block as it is expensive and doesn't need a lock on the task executor
+    for (PrioritizedSplitRunner split : splits) {
+        split.destroy();
+    }
+
+    // ...
+}
+
+PrioritizedSplitRunner#destroy {
+    destroyed.set(true);
+    split.close();  // SplitRunner split;
+}
+
+SqlTaskExecution.DriverSplitRunner#close() {
+    driver.close(); // Driver driver;
+}

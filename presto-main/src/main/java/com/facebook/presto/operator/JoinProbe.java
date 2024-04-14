@@ -61,7 +61,7 @@ public class JoinProbe
         this.probeOutputChannels = probeOutputChannels;
         this.positionCount = page.getPositionCount();
         this.page = page;
-        this.probePage = probePage;
+        this.probePage = probePage; /* 包含原始page中的join列 且 确保已经load到内存中 */
         this.probeHashBlock = probeHashBlock;
         this.probeMayHaveNull = probeMayHaveNull(probePage);
     }

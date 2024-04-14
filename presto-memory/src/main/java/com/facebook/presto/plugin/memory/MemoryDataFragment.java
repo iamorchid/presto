@@ -30,14 +30,17 @@ public class MemoryDataFragment
 
     private final HostAddress hostAddress;
     private final long rows;
+    private final Integer bucket;
 
     @JsonCreator
     public MemoryDataFragment(
             @JsonProperty("hostAddress") HostAddress hostAddress,
+            @JsonProperty("bucket") int bucket,
             @JsonProperty("rows") long rows)
     {
         this.hostAddress = requireNonNull(hostAddress, "hostAddress is null");
         checkArgument(rows >= 0, "Rows number can not be negative");
+        this.bucket = bucket;
         this.rows = rows;
     }
 
@@ -45,6 +48,12 @@ public class MemoryDataFragment
     public HostAddress getHostAddress()
     {
         return hostAddress;
+    }
+
+    @JsonProperty
+    public int getBucket()
+    {
+        return bucket;
     }
 
     @JsonProperty
@@ -66,6 +75,7 @@ public class MemoryDataFragment
     public static MemoryDataFragment merge(MemoryDataFragment a, MemoryDataFragment b)
     {
         checkArgument(a.getHostAddress().equals(b.getHostAddress()), "Can not merge fragments from different hosts");
-        return new MemoryDataFragment(a.getHostAddress(), a.getRows() + b.getRows());
+        checkArgument(a.getBucket() == b.getBucket(), "Can not merge fragments from different buckets");
+        return new MemoryDataFragment(a.getHostAddress(), a.bucket, a.getRows() + b.getRows());
     }
 }

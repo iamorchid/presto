@@ -623,6 +623,10 @@ public class SqlQueryScheduler
                         updateQueryOutputLocations(queryStateMachine, rootBufferId, tasks, noMoreExchangeLocations);
             }
             else {
+                /**
+                 * 就目前来说，只有root {@link StreamingPlanSection}的output是返回给query用户的，其他section的数据直接
+                 * 丢弃。也就是说，目前不存在section之间通过output进行交互。
+                 */
                 bucketToPartition = Optional.empty();
                 outputBuffers = createDiscardingOutputBuffers();
                 locationsConsumer = (fragmentId, tasks, noMoreExchangeLocations) -> {};
@@ -664,6 +668,10 @@ public class SqlQueryScheduler
 
     private void addStateChangeListeners(SectionExecution sectionExecution)
     {
+        /**
+         * 当queryStateMachine的状态变为done后，会触发整个query的cancel，进而执行{@link #abort()}来终止所有的stage。
+         * 触发时机参考：{@link com.facebook.presto.execution.SqlQueryExecution#SqlQueryExecution}
+         */
         for (StageExecutionAndScheduler stageExecutionAndScheduler : sectionExecution.getSectionStages()) {
             SqlStageExecution stageExecution = stageExecutionAndScheduler.getStageExecution();
             if (isRootFragment(stageExecution.getFragment())) {
@@ -677,6 +685,11 @@ public class SqlQueryScheduler
                     }
                 });
             }
+
+            /**
+             * 当某个stage被cancel后（即执行{@link #cancelStage(StageId)}）,对整个query没有影响，可以认为是
+             * stage的执行提前结束了（尽管stage的状态还是{@link StageExecutionState#CANCELED}）。
+             */
             stageExecution.addStateChangeListener(state -> {
                 if (queryStateMachine.isDone()) {
                     return;

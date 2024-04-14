@@ -21,6 +21,7 @@ import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.connector.ConnectorBucketNodeMap;
 import com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider;
+import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.google.common.collect.ImmutableList;
@@ -28,11 +29,15 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.ToIntFunction;
+import java.util.stream.IntStream;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.connector.ConnectorBucketNodeMap.createBucketNodeMap;
+import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Math.toIntExact;
+import static java.util.Collections.singletonList;
 
 public class TpchNodePartitioningProvider
         implements ConnectorNodePartitioningProvider
@@ -65,6 +70,9 @@ public class TpchNodePartitioningProvider
     @Override
     public BucketFunction getBucketFunction(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorPartitioningHandle partitioningHandle, List<Type> partitionChannelTypes, int bucketCount)
     {
+        /**
+         * 通过列orderKey来判断某行所属的bucket（表orders以及lineitem都包含orderKey列）。
+         */
         long totalRows = ((TpchPartitioningHandle) partitioningHandle).getTotalRows();
         long rowsPerBucket = totalRows / bucketCount;
         checkArgument(partitionChannelTypes.equals(ImmutableList.of(BIGINT)), "Expected one BIGINT parameter");
@@ -75,5 +83,15 @@ public class TpchNodePartitioningProvider
     public int getBucketCount(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorPartitioningHandle partitioningHandle)
     {
         return nodeManager.getRequiredWorkerNodes().size() * splitsPerNode;
+    }
+
+    @Override
+    public List<ConnectorPartitionHandle> listPartitionHandles(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorPartitioningHandle partitioningHandle) {
+        if (((TpchPartitioningHandle) partitioningHandle).isGroupedExecutionDisabled()) {
+            return singletonList(NOT_PARTITIONED);
+        }
+
+        int bucketCount = nodeManager.getRequiredWorkerNodes().size() * splitsPerNode;
+        return IntStream.range(0, bucketCount).mapToObj(TpchPartitionHandle::new).collect(toImmutableList());
     }
 }

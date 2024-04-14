@@ -299,6 +299,10 @@ public final class StreamPropertyDerivations
             if (streamPartitionSymbols.isPresent() && streamPartitionSymbols.get().isEmpty()) {
                 return new StreamProperties(MULTIPLE, Optional.empty(), false);
             }
+            /**
+             * 当前每个connector split会单独创建一个Driver进行处理（参考{@link com.facebook.presto.execution.SqlTaskExecution#scheduleTableScanSource}），
+             * 而一个node分配到的split数量不是固定的，因此这里采用{@link StreamProperties.StreamDistribution.MULTIPLE}。
+             */
             return new StreamProperties(MULTIPLE, streamPartitionSymbols, false);
         }
 
@@ -321,9 +325,21 @@ public final class StreamPropertyDerivations
             return Optional.of(builder.build());
         }
 
+        /**
+         * 对于ExchangeNode而言，它不同于其他大部分node，即它没有直接从inputProperties提取StreamProperties来作为自己的
+         * StreamProperties。这也符合exchange的特点，因为它本身引入的目的就是改变distribution或者partitioning的方式。
+         */
         @Override
         public StreamProperties visitExchange(ExchangeNode node, List<StreamProperties> inputProperties)
         {
+            /**
+             * 如果ExchangeNode定义了{@link ExchangeNode#orderingScheme}，则这里它的输出必是single stream且排序的。
+             * 参考:
+             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#visitRemoteSource}
+             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#createRemoteSource}。
+             *
+             * 另外，由{@link AddLocalExchanges.Rewriter#visitOutput}知道，OutputNode和remote ExchangeNode之间是不会引入local ExchangeNode的。
+             */
             if (node.isEnsureSourceOrdering() || node.getOrderingScheme().isPresent()) {
                 return StreamProperties.ordered();
             }
@@ -536,6 +552,18 @@ public final class StreamPropertyDerivations
         @Override
         public StreamProperties visitWindow(WindowNode node, List<StreamProperties> inputProperties)
         {
+            /**
+             * 通过{@link #deriveProperties}可以知道，WindowNode的local properties（比如GroupingProperty
+             * 和SortingProperty）是由{@link PropertyDerivations#streamBackdoorDeriveProperties}提供的，
+             * 这个会最终调用到{@link PropertyDerivations.Visitor#visitWindow}。
+             *
+             * 而StreamProperties的distribution以及partitioning columns则只需要和上游节点保持一致即可，因为
+             * {@link AddLocalExchanges.Rewriter#enforce}已经保证了上游节点的stream properties是符合本节点
+             * 要求的（比如必要时通过引入local ExchangeNode来保证）。
+             *
+             * 一般情况下，只有ExchangeNode才会采用和它的上游节点不一样的distribution或者partitioning columns，
+             * 这也是ExchangeNode的作用所在，参见{@link #visitExchange}。
+             */
             StreamProperties childProperties = Iterables.getOnlyElement(inputProperties);
             if (childProperties.isSingleStream() && node.getPartitionBy().isEmpty() && node.getOrderingScheme().isPresent()) {
                 return StreamProperties.ordered();
@@ -633,18 +661,34 @@ public final class StreamPropertyDerivations
         }
     }
 
+    /**
+     * 这个class主要是被{@link AddLocalExchanges}使用。AddLocalExchanges会根据需要引入local exchange，这个决定着
+     * pipeline级别或算子级别的并发（即Driver个数）、stream之间数据的partitioning方式等。
+     *
+     * 需要理解同{@link ActualProperties}差异。
+     */
     @Immutable
     public static final class StreamProperties
     {
         public enum StreamDistribution
         {
-            SINGLE, MULTIPLE, FIXED
+            SINGLE,   // operator node参与的pipeline的Driver实例个数只会为1
+            MULTIPLE, // operator node参与的pipeline的Driver实例个数不确定
+            FIXED     // operator node参与的pipeline的Driver实例个数确定
         }
 
         private final StreamDistribution distribution;
 
+        // 如果不为空，则不同的输出流（一个Driver产生一个流）中这些列不会存在交集
         private final Optional<List<VariableReferenceExpression>> partitioningColumns; // if missing => partitioned with some unknown scheme
 
+        /**
+         * {@link #otherActualProperties}中的localProperties包含了{@link com.facebook.presto.spi.SortingProperty}时，
+         * 并不意味着{@link #ordered}为true，只有当operator node的{@link #distribution}为SINGLE时才行。
+         *
+         * 参考：
+         * {@link com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.Visitor#visitSort}
+         */
         private final boolean ordered;
 
         // We are only interested in the local properties, but PropertyDerivations requires input
@@ -737,6 +781,7 @@ public final class StreamPropertyDerivations
 
         public boolean isPartitionedOn(Iterable<VariableReferenceExpression> columns)
         {
+            // partitioningColumns为Optional.empty()，表示采用了位置partitioning scheme
             if (!partitioningColumns.isPresent()) {
                 return false;
             }

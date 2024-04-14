@@ -28,6 +28,10 @@ import static java.util.Collections.unmodifiableSet;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
 
+/**
+ * 对于{@link GroupingProperty}，group指得是具有相同keys且连续放在一起的一组数据（并不限定是group by以后的结果，
+ * 因为group by以后，相同group by keys往往只对应一个结果）。而这里的group里面，可以有多个结果具有相同的keys。
+ */
 public final class GroupingProperty<E>
         implements LocalProperty<E>
 {
@@ -44,6 +48,10 @@ public final class GroupingProperty<E>
     @Override
     public boolean isOrderSensitive()
     {
+        /**
+         * [question] 为啥order会对grouping有影响？
+         * order可以优化group的实现，参考{@link #isSimplifiedBy}说明。
+         */
         return true;
     }
 
@@ -66,6 +74,26 @@ public final class GroupingProperty<E>
     @Override
     public boolean isSimplifiedBy(LocalProperty<E> known)
     {
+        /**
+         * 注意如果known为{@link SortingProperty}，它是可以简化group by的。排序本质上也是将数据按照排序的keys进行分组。
+         *
+         * 如果既有{@link GroupingProperty}，又有{@link SortingProperty}，则排序针对的是同一个group下的items进行排序，
+         * 比如窗口函数：f(...) over (partition by clerk order by orderdate)。
+         *
+         * 参考:
+         * {@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#AddLocalExchanges}
+         * {@link com.facebook.presto.spi.plan.AggregationNode#preGroupedVariables}
+         */
+        /**
+         * ConstantProperty并不一定能简化GroupingProperty，比如{@link #columns}不包含{@link ConstantProperty#column}。
+         * 虽然对于known为ConstantProperty时，这里返回了true，但{@link #withConstants}的实现可以看到，如果{@link #columns}
+         * 不包含ConstantProperty中的列, 则起不到优化效果。
+         *
+         * 更合理的做法，这里只用 getColumns().containsAll(known.getColumns()) 即可。
+         *
+         * 参考：
+         * {@link com.facebook.presto.sql.planner.optimizations.LocalProperties#match}
+         */
         return known instanceof ConstantProperty || getColumns().containsAll(known.getColumns());
     }
 

@@ -30,10 +30,24 @@ import static java.util.Objects.requireNonNull;
 
 public class PartitioningScheme
 {
+    /**
+     * {@link Partitioning#handle}由下游stage提供，从而确保本stage的output对应的partition符合下游的预期。
+     * 详细参考：{@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#planPartitionedJoin}
+     */
     private final Partitioning partitioning;
+
     private final List<VariableReferenceExpression> outputLayout;
     private final Optional<VariableReferenceExpression> hashColumn;
     private final boolean replicateNullsAndAny;
+
+    /**
+     * 下游（获取输入的stage）通过bucketToPartition告诉上游（提供输出的stage）如何将结果对
+     * 应到不通的partition上，具体如何计算bucket由{@link #partitioning}确定。比如，采用
+     * {@link SystemPartitioningHandle#FIXED_ARBITRARY_DISTRIBUTION}。
+     *
+     * {@link SectionExecutionFactory#createStreamingLinkedStageExecutions}中会在下游
+     * stage执行计划创建好后，调用{@link #withBucketToPartition}来设置这个字段。
+     */
     private final Optional<int[]> bucketToPartition;
 
     public PartitioningScheme(Partitioning partitioning, List<VariableReferenceExpression> outputLayout)

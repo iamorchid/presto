@@ -187,6 +187,10 @@ public class SqlTask
                 if (newState == FAILED || newState == ABORTED) {
                     // don't close buffers for a failed query
                     // closed buffers signal to upstream tasks that everything finished cleanly
+                    /**
+                     * 参考{@link com.facebook.presto.execution.buffer.PartitionedOutputBuffer#fail()}说明，
+                     * 为啥这里不进行outputBuffer.destroy()操作。
+                     */
                     outputBuffer.fail();
                 }
                 else {
