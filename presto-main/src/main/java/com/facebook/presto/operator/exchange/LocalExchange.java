@@ -268,6 +268,11 @@ public class LocalExchange
         }
     }
 
+    /**
+     * 当{@link LocalExchangeSinkOperator#close()}调用时（即对应的driver退出时），将会调用这个方法。
+     *
+     * {@link LocalExchangeSink}和{@link LocalExchangeSinkOperator}一一对应。
+     */
     private void sinkFinished(LocalExchangeSink sink)
     {
         checkNotHoldsLock(this);
@@ -278,6 +283,13 @@ public class LocalExchange
         checkAllSinksComplete();
     }
 
+    /**
+     * 要创建的{@link LocalExchangeSinkFactory}的数量由{@link com.facebook.presto.sql.planner.plan.ExchangeNode#sources}
+     * 的数量决定，它在一开始就是确定，下面方法在{@link #LocalExchange}构造函数中就会调用。
+     *
+     * 另外，LocalExchangeSinkFactory和LocalExchangeSinkOperatorFactory一一对应，由LocalExchangeSinkOperatorFactory创建的
+     * LocalExchangeSinkOperator，使用相同的LocalExchangeSinkFactory来创建LocalExchangeSink。
+     */
     private void noMoreSinkFactories()
     {
         checkNotHoldsLock(this);
@@ -288,6 +300,10 @@ public class LocalExchange
         checkAllSinksComplete();
     }
 
+    /**
+     * 当{@link LocalExchangeSinkOperator.LocalExchangeSinkOperatorFactory#noMoreOperators()}将会调用这个方法，这个发生在对应
+     * 的pipeline不再需要创建新的Drivers（即{@link com.facebook.presto.operator.DriverFactory#noMoreDrivers()}）。
+     */
     private void sinkFactoryClosed(LocalExchangeSinkFactory sinkFactory)
     {
         checkNotHoldsLock(this);

@@ -53,4 +53,11 @@ public class DynamicSplitPlacementPolicy
     {
         return nodeSelector.getActiveNodes();
     }
+
+    @Override
+    public InternalNode getNodeForBucket(int bucketId)
+    {
+        // 采用DynamicSplitPlacementPolicy时，bucket和node之间并没有固定的映射关系
+        throw new UnsupportedOperationException();
+    }
 }

@@ -24,6 +24,7 @@ import org.objectweb.asm.util.CheckClassAdapter;
 import org.objectweb.asm.util.Textifier;
 import org.objectweb.asm.util.TraceClassVisitor;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -171,7 +172,15 @@ public class ClassGenerator
             }
         }
 
-        dumpClassPath.ifPresent(path -> bytecodes.forEach((className, bytecode) -> {
+        Optional<Path> dumpPath = dumpClassPath;
+        if (!dumpPath.isPresent()) {
+            File file = new File("/tmp/dumpPrestoClass");
+            if (file.exists() && file.isDirectory()) {
+                dumpPath = Optional.of(file.toPath());
+            }
+        }
+
+        dumpPath.ifPresent(path -> bytecodes.forEach((className, bytecode) -> {
             String name = typeFromJavaClassName(className).getClassName() + ".class";
             Path file = path.resolve(name).toAbsolutePath();
             try {

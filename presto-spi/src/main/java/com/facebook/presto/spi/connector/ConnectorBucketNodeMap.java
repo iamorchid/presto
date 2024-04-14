@@ -31,6 +31,10 @@ public final class ConnectorBucketNodeMap
     private final Optional<List<Node>> bucketToNode;
     private final NodeSelectionStrategy nodeSelectionStrategy;
 
+    /**
+     * 这里不指定bucket和node的对应关系（即某个bucket应该调度到哪个node），而由presto框架选择bucket对应的node。
+     * 参考：{@link com.facebook.presto.sql.planner.NodePartitioningManager#getNodePartitioningMap}
+     */
     public static ConnectorBucketNodeMap createBucketNodeMap(int bucketCount)
     {
         return new ConnectorBucketNodeMap(bucketCount, Optional.empty(), NO_PREFERENCE);

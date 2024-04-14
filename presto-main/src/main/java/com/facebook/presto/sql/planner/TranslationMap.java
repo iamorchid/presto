@@ -59,7 +59,7 @@ class TranslationMap
     private final VariableReferenceExpression[] fieldVariables;
 
     // current mappings of sub-expressions -> symbol
-    private final Map<Expression, VariableReferenceExpression> expressionToVariables = new HashMap<>();
+    private final Map<Expression, VariableReferenceExpression> expressionToVariables = new HashMap<>(); // SymbolReference -> VariableReferenceExpression
     private final Map<Expression, Expression> expressionToExpressions = new HashMap<>();
 
     public TranslationMap(RelationPlan rewriteBase, Analysis analysis, Map<NodeRef<LambdaArgumentDeclaration>, VariableReferenceExpression> lambdaDeclarationToVariableMap)
@@ -124,6 +124,10 @@ class TranslationMap
             @Override
             public Expression rewriteExpression(Expression node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
             {
+                /**
+                 * 这里的操作会复用上一级PlanNode已有表达式的计算结果。比如上一级PlanNode已经计算了price*2（输出变量为expr)，
+                 * 下一级PlanNode进行 price*2+10 时，可以直接复用上级PlanNode已有结果，即重写为 expr+10 。
+                 */
                 if (expressionToVariables.containsKey(node)) {
                     return new SymbolReference(expression.getLocation(), expressionToVariables.get(node).getName());
                 }
@@ -143,6 +147,9 @@ class TranslationMap
             return;
         }
 
+        /**
+         * 将SQL中原始的引用 统一到 底层{@link RelationPlan}的输出符号，方便进行expression比较（即{@link Map#containsKey操作}）。
+         */
         Expression translated = translateNamesToSymbols(expression);
         expressionToVariables.put(translated, variable);
 

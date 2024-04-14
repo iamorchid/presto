@@ -289,8 +289,20 @@ public class SourcePartitionedScheduler
             Multimap<InternalNode, Lifespan> noMoreSplitsNotification = ImmutableMultimap.of();
             if (scheduleGroup.pendingSplits.isEmpty() && scheduleGroup.state == ScheduleGroupState.NO_MORE_SPLITS) {
                 scheduleGroup.state = ScheduleGroupState.DONE;
+                /**
+                 * 对于{@link Lifespan#TASK_WIDE}类型的lifespan，何时才会向worker通知noMoreSplits？
+                 *
+                 * 这个需要由更上层的scheduler来控制，比如{@link FixedSourcePartitionedScheduler}或{@link SqlQueryScheduler}，因为
+                 * 一个stage可以包含多个TableScanNode（即对应多个这里的{@link SourcePartitionedScheduler}），只有更上层的scheduler才
+                 * 知道何时stage满足noMoreSplits，具体参考：{@link SqlStageExecution#schedulingComplete(PlanNodeId)}。
+                 */
+                /**
+                 * lifespan.isTaskWide()为false，则说明grouped execution必然开启，即connector定义了自己特定的node partitioning
+                 * 策略（参见{@link com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider}），此时这里使用的
+                 * {@link #splitPlacementPolicy}一定为{@link BucketedSplitPlacementPolicy}。
+                 */
                 if (!lifespan.isTaskWide()) {
-                    InternalNode node = ((BucketedSplitPlacementPolicy) splitPlacementPolicy).getNodeForBucket(lifespan.getId());
+                    InternalNode node = splitPlacementPolicy.getNodeForBucket(lifespan.getId());
                     noMoreSplitsNotification = ImmutableMultimap.of(node, lifespan);
                 }
             }
@@ -430,6 +442,11 @@ public class SourcePartitionedScheduler
         if (scheduleGroups.isEmpty() && splitSource.isFinished()) {
             // Wake up blocked caller so that it will invoke schedule() right away.
             // Once schedule is invoked, state will be transitioned to FINISHED.
+            /**
+             * 由{@link #schedule()}说明可以知道，仅当{@link #groupedExecution}为false的情况下，在splitSource完成时，
+             * 才会将{@link #state}的状态设置为FINISHED。对于{@link #groupedExecution}为true的情况，因为考虑到对group
+             * 失败重试，需要等到{@link #notifyAllLifespansFinishedExecution}调用后，才能确定stage是否执行完成。
+             */
             whenFinishedOrNewLifespanAdded.set(null);
             whenFinishedOrNewLifespanAdded = SettableFuture.create();
         }
@@ -479,14 +496,27 @@ public class SourcePartitionedScheduler
             return ImmutableSet.of();
         }
 
+        /**
+         * 锁定nodes以保证后续split仅调度到这些被锁定的nodes上（下面会保证在这些节点预先启动task，然后从source stage读取数据）。否则，
+         * 将新的split调度到其他节点上，可能无法从source stage读取到数据。因为执行stage.transitionToFinishedTaskScheduling()后，
+         * 本stage已有的tasks完成读取后，source stage的输出就可以关闭了。
+         */
         splitPlacementPolicy.lockDownNodes();
 
+        /**
+         * TODO 这里会为每个locked node都拉起一个任务，但有些任务可能分配不到splits？导致白白拉取broadcast output的结果到本地？
+         */
         Set<InternalNode> scheduledNodes = stage.getScheduledNodes();
         Set<RemoteTask> newTasks = splitPlacementPolicy.getActiveNodes().stream()
                 .filter(node -> !scheduledNodes.contains(node))
                 .flatMap(node -> stage.scheduleSplits(node, ImmutableMultimap.of(), ImmutableMultimap.of()).stream())
                 .collect(toImmutableSet());
 
+        /**
+         * 参考 {@link StageLinkage#processScheduleResults}。当前stage的状态转换为{@link FINISHED_TASK_SCHEDULING}时，
+         * 最后将会通知child stage（即给本stage提供数据源的stage），可以设置no more output buffers，即child stage可以将缓
+         * 存的pages及时进行清除（主要是针对broadcast时多个output buffers复用相同page的情况），避免因为缓存塞满而一直阻塞。
+         */
         // notify listeners that we have scheduled all tasks so they can set no more buffers or exchange splits
         stage.transitionToFinishedTaskScheduling();
 

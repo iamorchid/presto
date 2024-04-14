@@ -31,22 +31,19 @@ public final class MemoryColumnHandle
 {
     private final String name;
     private final Type columnType;
-    private final int columnIndex;
 
-    public MemoryColumnHandle(ColumnMetadata columnMetadata, int columnIndex)
+    public MemoryColumnHandle(ColumnMetadata columnMetadata)
     {
-        this(columnMetadata.getName(), columnMetadata.getType(), columnIndex);
+        this(columnMetadata.getName(), columnMetadata.getType());
     }
 
     @JsonCreator
     public MemoryColumnHandle(
             @JsonProperty("name") String name,
-            @JsonProperty("columnType") Type columnType,
-            @JsonProperty("columnIndex") int columnIndex)
+            @JsonProperty("columnType") Type columnType)
     {
         this.name = requireNonNull(name, "name is null");
         this.columnType = requireNonNull(columnType, "columnType is null");
-        this.columnIndex = columnIndex;
     }
 
     @JsonProperty
@@ -59,12 +56,6 @@ public final class MemoryColumnHandle
     public Type getColumnType()
     {
         return columnType;
-    }
-
-    @JsonProperty
-    public int getColumnIndex()
-    {
-        return columnIndex;
     }
 
     public ColumnMetadata toColumnMetadata()
@@ -89,17 +80,14 @@ public final class MemoryColumnHandle
         }
         MemoryColumnHandle other = (MemoryColumnHandle) obj;
         return Objects.equals(this.name, other.name) &&
-                Objects.equals(this.columnType, other.columnType) &&
-                Objects.equals(this.columnIndex, other.columnIndex);
+                Objects.equals(this.columnType, other.columnType);
     }
 
     public static List<MemoryColumnHandle> extractColumnHandles(List<ColumnMetadata> columns)
     {
         ImmutableList.Builder<MemoryColumnHandle> columnHandles = ImmutableList.builder();
-        int columnIndex = 0;
         for (ColumnMetadata column : columns) {
-            columnHandles.add(new MemoryColumnHandle(column, columnIndex));
-            columnIndex++;
+            columnHandles.add(new MemoryColumnHandle(column));
         }
         return columnHandles.build();
     }
@@ -110,7 +98,6 @@ public final class MemoryColumnHandle
         return toStringHelper(this)
                 .add("name", name)
                 .add("columnType", columnType)
-                .add("columnIndex", columnIndex)
                 .toString();
     }
 }

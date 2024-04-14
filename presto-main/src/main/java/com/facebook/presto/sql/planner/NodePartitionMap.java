@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.execution.scheduler.BucketNodeMap;
 import com.facebook.presto.execution.scheduler.FixedBucketNodeMap;
+import com.facebook.presto.execution.scheduler.FixedSourcePartitionedScheduler;
 import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
 import com.google.common.collect.ImmutableList;
@@ -37,6 +38,13 @@ import static java.util.Objects.requireNonNull;
 //  in the above case, as the co-existence of BucketNodeMap and NodePartitionMap is confusing.
 public class NodePartitionMap
 {
+    /**
+     * bucketToNode     ： 本stage使用，决定split调度到那个node上（结合splitToBucket）
+     * bucketToPartition： 给上游stage使用，决定上游stage输出应该投放到那个output buffer (结合{@link PartitioningScheme})
+     * partitionToNode  ： 本stage使用，决定本stage的node应该消费上游stage输出的哪个partition
+     *
+     * 参考：{@link NodePartitioningManager#getNodePartitioningMap}
+     */
     private final List<InternalNode> partitionToNode;
     private final int[] bucketToPartition;
     private final ToIntFunction<Split> splitToBucket;

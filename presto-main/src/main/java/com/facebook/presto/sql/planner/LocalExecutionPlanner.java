@@ -565,6 +565,15 @@ public class LocalExecutionPlanner
         List<Integer> partitionChannels;
         List<Optional<ConstantExpression>> partitionConstants;
         List<Type> partitionChannelTypes;
+
+        /**
+         * 如果{@link PartitioningScheme#hashColumn}存在时，说明上游节点将会预计算好所需要的HASH。hashColumn初始化逻辑
+         * 可以参考{@link HashGenerationOptimizer$Rewriter#visitExchange}。
+         *
+         * 另外，如果PartitioningScheme->Partitioning->PartitioningHandle->ConnectorPartitioningHandle采用的是
+         * {@link SystemPartitioningHandle}，则{@link SystemPartitionFunction#createBucketFunction}的isHashPrecomputed
+         * 参数将会设置为true。
+         */
         if (partitioningScheme.getHashColumn().isPresent()) {
             partitionChannels = ImmutableList.of(outputLayout.indexOf(partitioningScheme.getHashColumn().get()));
             partitionConstants = ImmutableList.of(Optional.empty());
@@ -595,6 +604,14 @@ public class LocalExecutionPlanner
                     .collect(toImmutableList());
         }
 
+        /**
+         * 这里创建{@link PartitionFunction}时，仅仅传入了partition channel对应的类型，但并没有传入partition channel在page中对
+         * 应的下标，那么PartitionFunction怎么知道从{@link Page}中提取那些列（即partition channel）？
+         *
+         * 通过{@link com.facebook.presto.operator.repartition.PartitionedOutputOperator.PagePartitioner#partitionPage}
+         * 可以知道，在调用{@link PartitionFunction#getPartition}之前，会基于{@link OutputPartitioning#partitionChannels}
+         * 从原始Page中创建一个新的Page，专门用于计算partition。
+         */
         PartitionFunction partitionFunction = nodePartitioningManager.getPartitionFunction(taskContext.getSession(), partitioningScheme, partitionChannelTypes);
         OptionalInt nullChannel = OptionalInt.empty();
         Set<VariableReferenceExpression> partitioningColumns = partitioningScheme.getPartitioning().getVariableReferences();
@@ -934,6 +951,7 @@ public class LocalExecutionPlanner
         public PhysicalOperation visitRemoteSource(RemoteSourceNode node, LocalExecutionPlanContext context)
         {
             if (node.getOrderingScheme().isPresent()) {
+                // 这里会创建单Driver的pipeline进行归并排序
                 return createMergeSource(node, context);
             }
 
@@ -971,6 +989,14 @@ public class LocalExecutionPlanner
 
         private PhysicalOperation createRemoteSource(RemoteSourceNode node, LocalExecutionPlanContext context)
         {
+            /**
+             * 通过{@link com.facebook.presto.operator.ExchangeOperator.ExchangeOperatorFactory#createOperator}
+             * 可以知道，如果ExchangeOperatorFactory创建多个ExchangeOperator实例，它们使用相同的ExchangeClient来poll
+             * 可用的page。因此，即使对于同一个{@link com.facebook.presto.split.RemoteSplit}，也无法保证它的pages被同一
+             * 个ExchangeOperator消费。
+             *
+             * 如果有保序要求，则不能允许ExchangeOperatorFactory创建多个operator实例。
+             */
             if (node.isEnsureSourceOrdering()) {
                 context.setDriverInstanceCount(1);
             }
@@ -2360,7 +2386,7 @@ public class LocalExecutionPlanner
                 JoinNode node,
                 PhysicalOperation buildSource,
                 LocalExecutionPlanContext buildContext,
-                List<VariableReferenceExpression> buildVariables,
+                List<VariableReferenceExpression> buildVariables /* build table的join列 */,
                 Optional<VariableReferenceExpression> buildHashVariable,
                 PhysicalOperation probeSource,
                 boolean spillEnabled,
@@ -3004,8 +3030,17 @@ public class LocalExecutionPlanner
         @Override
         public PhysicalOperation visitExchange(ExchangeNode node, LocalExecutionPlanContext context)
         {
+            /**
+             * remote ExchangeNode已经在fragmenting阶段转成了{@link RemoteSourceNode}。
+             * 参考: {@link com.facebook.presto.sql.planner.BasePlanFragmenter#visitExchange}
+             */
             checkArgument(node.getScope().isLocal(), "Only local exchanges are supported in the local planner");
 
+            /**
+             * task处理的{@link PlanFragment}会被分为多个pipeline，每个pipeline可以创建多个instance（每个instance对应一个
+             * 独立运行的Driver），pipeline之间会存在数据流转。如果pipeline需要对上游pipeline的partial sort进行归并排序，则
+             * 需要采用单个instance。
+             */
             if (node.getOrderingScheme().isPresent()) {
                 return createLocalMerge(node, context);
             }
@@ -3102,6 +3137,7 @@ public class LocalExecutionPlanner
             for (int i = 0; i < node.getSources().size(); i++) {
                 PlanNode sourceNode = node.getSources().get(i);
 
+                // 这里新创建的sub context不会继承 driverInstanceCount
                 LocalExecutionPlanContext subContext = context.createSubContext();
                 PhysicalOperation source = sourceNode.accept(this, subContext);
                 driverFactoryParametersList.add(new DriverFactoryParameters(subContext, source));
@@ -3136,6 +3172,30 @@ public class LocalExecutionPlanner
                         node.getId(),
                         localExchangeFactory.newSinkFactoryId(),
                         pagePreprocessor));
+
+                /**
+                 * {@link com.facebook.presto.execution.SqlTaskExecution#scheduleDriversForTaskLifeCycle()}会根据
+                 * instanceCount来为DriverFactory创建指定数量的Driver。假设我们由下列fragment：
+                 *
+                 * XxxSortNode -> ExchangeNode#1 (GATHER) -> LimitNode -> ExchangeNode#2 (REPARTITION) -> YyySourceNode
+                 *
+                 * 假设YyySourceNode采用的driverInstanceCount为1，ExchangeNode#2采用的driverInstanceCount为2（很明显，
+                 * ExchangeNode#1采用的driverInstanceCount必定为1）。此时，ExchangeNode#2对应的LocalExchange会产生两个结
+                 * 果buffer，而每个LocalExchangeSourceOperatorFactory生成operator时，只会消费其中的一个。因此，需要保证有
+                 * 2个LocalExchangeSourceOperatorFactory实例生成。而LocalExchangeSinkOperator#1会根据partitioning信息
+                 * 将结果写到LocalExchange中对应的buffer。
+                 *
+                 * 最后会生成如下形式的4个Driver，其中LocalExchangeSinkOperator#1的结果会会被LocalExchangeSourceOperator#2
+                 * 和LocalExchangeSourceOperator#3读取，而LocalExchangeSinkOperator#4和LocalExchangeSinkOperator#5的结
+                 * 果则会被#6读取。
+                 *
+                 * XxxSortOperator -> LocalExchangeSourceOperator#6
+                 * LocalExchangeSinkOperator#4 -> LimitOperator -> LocalExchangeSourceOperator#2
+                 * LocalExchangeSinkOperator#5 -> LimitOperator -> LocalExchangeSourceOperator#3
+                 * LocalExchangeSinkOperator#1 -> YyySourceOperator
+                 *
+                 * 需要说明的是，LocalExchangeSinkOperatorFactory的加入总是会标志一个pipe的结束（它负责最后输出）。
+                 */
                 context.addDriverFactory(
                         subContext.isInputDriver(),
                         false,
@@ -3344,6 +3404,10 @@ public class LocalExecutionPlanner
                 VariableReferenceExpression variable = entry.getKey();
                 Aggregation aggregation = entry.getValue();
 
+                /**
+                 * 通过{@link com.facebook.presto.sql.planner.iterative.rule.MultipleDistinctAggregationToMarkDistinct}知道，如果
+                 * distinct aggregation可以被MarkDistinctNode取代时，则Aggregation的distinct属性将会被清除。
+                 */
                 accumulatorFactories.add(buildAccumulatorFactory(source, aggregation, useSpill));
                 aggregationOutputVariables.add(variable);
             }
@@ -3521,7 +3585,7 @@ public class LocalExecutionPlanner
     }
 
     /**
-     * Encapsulates an physical operator plus the mapping of logical variables to channel/field
+     * Encapsulates a physical operator plus the mapping of logical variables to channel/field
      */
     public static class PhysicalOperation
     {

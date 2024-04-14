@@ -37,6 +37,9 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Integer.numberOfTrailingZeros;
 import static java.lang.Math.toIntExact;
 
+/**
+ * [question] 在{@link #outerPositionTracker}没有定义的情况下，看起来是线程安全的？？
+ */
 @NotThreadSafe
 public class PartitionedLookupSource
         implements LookupSource
@@ -92,6 +95,10 @@ public class PartitionedLookupSource
 
         // this generator is only used for getJoinPosition without a rawHash and in this case
         // the hash channels are always packed in a page without extra columns
+        /**
+         * 参见{@link JoinProbe#getCurrentJoinPosition}，通常情况下probe都会自己提供probeHashBlock。否则，这里的partitionGenerator
+         * 必须和{@link com.facebook.presto.operator.exchange.LocalExchange#createPartitionFunction}一致。
+         */
         this.partitionGenerator = new LocalPartitionGenerator(InterpretedHashGenerator.createPositionalWithTypes(hashChannelTypes), lookupSources.size());
 
         this.partitionMask = lookupSources.size() - 1;

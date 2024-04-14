@@ -133,6 +133,13 @@ public class PrioritizedSplitRunner
         if (finished) {
             finishedFuture.set(null);
         }
+        /**
+         * [BUGGY]
+         * 这里如果发生了{@link #destroy()}，{@link com.facebook.presto.execution.executor.TaskExecutor.TaskRunner#run}
+         * 后续将不会再调用{@link #isFinished()}，则意味着finishedFuture将用于不会处于done的状态？
+         */
+        // destroy();
+
         return finished || destroyed.get() || taskHandle.isDestroyed();
     }
 

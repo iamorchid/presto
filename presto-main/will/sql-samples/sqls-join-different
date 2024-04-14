@@ -1,0 +1,90 @@
+SET SESSION join_distribution_type = 'BROADCAST';
+
+explain
+select l.orderkey, o.orderdate from lineitem as l, orders as o where l.orderkey = o.orderkey;
+
+                                                                                                                       Query Plan                                                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, orderdate] => [orderkey:bigint, orderdate:varchar]                                                                                                                                                                                 
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, orderdate:varchar]                                                                                                                                                                         
+         - InnerJoin[("orderkey" = "orderkey_0")][$hashvalue, $hashvalue_9] => [orderkey:bigint, orderdate:varchar]                                                                                                                                    
+                 Distribution: REPLICATED                                                                                                                                                                                                              
+             - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, projectLocality = LOCAL] => [orderkey:bigint, $hashvalue:bigint]                            
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                  
+                     $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:46)                                                                                                                                  
+                     orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:45)                                                                                                            
+             - LocalExchange[HASH][$hashvalue_9] (orderkey_0) => [orderkey_0:bigint, orderdate:varchar, $hashvalue_9:bigint]                                                                                                                           
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                        
+                 - RemoteStreamingExchange[REPLICATE] => [orderkey_0:bigint, orderdate:varchar, $hashvalue_10:bigint]                                                                                                                                  
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                    
+                     - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout='Optional[example:tpch:orders]'}, projectLocality = LOCAL] => [orderkey_0:bigint, orderdate:varchar, $hashvalue_11:bigint]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                          
+                             $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:60)                                                                                                                     
+                             orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (1:60)                                                                                                 
+                             orderkey_0 := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:60)                                                                                                  
+                                                                                                                                                                                                                                                       
+(1 row)
+
+
+### Right Join
+
+explain
+select l.orderkey, o.orderdate from lineitem as l right join orders as o on l.orderkey = o.orderkey;
+
+                                                                                                                       Query Plan                                                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, orderdate] => [orderkey:bigint, orderdate:varchar]                                                                                                                                                                                 
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, orderdate:varchar]                                                                                                                                                                         
+         - RightJoin[("orderkey" = "orderkey_0")][$hashvalue, $hashvalue_12] => [orderkey:bigint, orderdate:varchar]                                                                                                                                   
+                 Distribution: PARTITIONED                                                                                                                                                                                                             
+             - RemoteStreamingExchange[REPARTITION][$hashvalue] => [orderkey:bigint, $hashvalue:bigint]                                                                                                                                                
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                        
+                 - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}, projectLocality = LOCAL] => [orderkey:bigint, $hashvalue_11:bigint]                     
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                              
+                         $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (2:37)                                                                                                                           
+                         orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (2:37)                                                                                                        
+             - LocalExchange[HASH][$hashvalue_12] (orderkey_0) => [orderkey_0:bigint, orderdate:varchar, $hashvalue_12:bigint]                                                                                                                         
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}      
+                
+                // 这里可以看到，当采用right join时，即使指定了join_distribution_type为BROADCAST，这里也必须采用REPARTITION，而不是REPLICATE。
+                // 具体处理逻辑可以参考：  com.facebook.presto.sql.planner.iterative.rule.DetermineJoinDistributionType#getSyntacticOrderJoin                                                                                                                                                           
+                 - RemoteStreamingExchange[REPARTITION][$hashvalue_13] => [orderkey_0:bigint, orderdate:varchar, $hashvalue_13:bigint]                                                                                                                 
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                    
+                     - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout='Optional[example:tpch:orders]'}, projectLocality = LOCAL] => [orderkey_0:bigint, orderdate:varchar, $hashvalue_14:bigint]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                          
+                             $hashvalue_14 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (2:62)                                                                                                                     
+                             orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (2:62)                                                                                                 
+                             orderkey_0 := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (2:62)                                                                                                  
+                                                                                                                                                                                                                                                       
+(1 row)
+
+
+
+### Cross join
+
+explain
+select l.orderkey, o.orderdate from lineitem as l, orders as o;
+
+或者 
+
+explain
+select l.orderkey, o.orderdate from lineitem as l cross join orders as o;
+
+                                                                                 Query Plan                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, orderdate] => [orderkey:bigint, orderdate:varchar]                                                                                                      
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, orderdate:varchar]                                                                                              
+         - CrossJoin => [orderkey:bigint, orderdate:varchar]                                                                                                                
+                 Distribution: REPLICATED                                                                                                                                   
+             - TableScan[TableHandle {connectorId='example', connectorHandle='example:tpch:lineitem', layout='Optional[example:tpch:lineitem]'}] => [orderkey:bigint]       
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                          
+                     orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (2:37)                                 
+             - LocalExchange[SINGLE] () => [orderdate:varchar]                                                                                                              
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                             
+                 - RemoteStreamingExchange[REPLICATE] => [orderdate:varchar]                                                                                                
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                         
+                     - TableScan[TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout='Optional[example:tpch:orders]'}] => [orderdate:varchar] 
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                  
+                             orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (2:62)                      
+                                                                                                                                                                            
+(1 row)

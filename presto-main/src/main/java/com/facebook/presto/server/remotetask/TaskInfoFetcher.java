@@ -220,6 +220,12 @@ public class TaskInfoFetcher
             }
         };
         finalTaskInfo.addStateChangeListener(fireOnceStateChangeListener);
+
+        /**
+         * 根据{@link StateMachine#addStateChangeListener(StateChangeListener)}实现来看，
+         * 个人觉得下面这行代码应该是多余的，同时参考下面方法：
+         * {@link com.facebook.presto.execution.StageExecutionStateMachine#addFinalStageInfoListener}
+         */
         fireOnceStateChangeListener.stateChanged(finalTaskInfo.get());
     }
 

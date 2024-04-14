@@ -64,6 +64,7 @@ public class TpchRecordSet<E extends TpchEntity>
     private final List<TpchColumn<E>> columns;
     private final List<Type> columnTypes;
     private final TupleDomain<ColumnHandle> predicate;
+    private boolean failRead = false;
 
     public TpchRecordSet(Iterable<E> rows, TpchTable<E> table, List<TpchColumn<E>> columns, TupleDomain<ColumnHandle> predicate)
     {
@@ -76,6 +77,10 @@ public class TpchRecordSet<E extends TpchEntity>
         this.predicate = requireNonNull(predicate, "predicate is null");
     }
 
+    public void enableReadFail() {
+        this.failRead = true;
+    }
+
     @Override
     public List<Type> getColumnTypes()
     {
@@ -85,7 +90,7 @@ public class TpchRecordSet<E extends TpchEntity>
     @Override
     public RecordCursor cursor()
     {
-        return new TpchRecordCursor<>(rows.iterator(), table, columns, predicate);
+        return new TpchRecordCursor<>(rows.iterator(), table, columns, predicate, failRead);
     }
 
     public static final class TpchRecordCursor<E extends TpchEntity>
@@ -95,15 +100,18 @@ public class TpchRecordSet<E extends TpchEntity>
         private final TpchTable<E> table;
         private final List<TpchColumn<E>> columns;
         private final TupleDomain<ColumnHandle> predicate;
+        private final boolean failRead;
         private E row;
         private boolean closed;
 
-        public TpchRecordCursor(Iterator<E> rows, TpchTable<E> table, List<TpchColumn<E>> columns, TupleDomain<ColumnHandle> predicate)
+        public TpchRecordCursor(Iterator<E> rows, TpchTable<E> table, List<TpchColumn<E>> columns,
+                                TupleDomain<ColumnHandle> predicate, boolean failRead)
         {
             this.rows = requireNonNull(rows, "rows is null");
             this.table = requireNonNull(table, "table is null");
             this.columns = requireNonNull(columns, "columns is null");
             this.predicate = requireNonNull(predicate, "predicate is null");
+            this.failRead = failRead;
         }
 
         @Override
@@ -127,6 +135,9 @@ public class TpchRecordSet<E extends TpchEntity>
         @Override
         public boolean advanceNextPosition()
         {
+            if (failRead) {
+                throw new RuntimeException("failed to read tpch record");
+            }
             while (!closed && rows.hasNext()) {
                 row = rows.next();
                 if (rowMatchesPredicate()) {

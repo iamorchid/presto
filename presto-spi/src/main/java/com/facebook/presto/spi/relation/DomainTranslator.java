@@ -46,6 +46,10 @@ public interface DomainTranslator
 
     class ExtractionResult<T>
     {
+        /**
+         * tupleDomain对应的域值并不完全匹配原始谓词（参见{@link TupleDomain#columnWiseUnion}，因此tupleDomain
+         * 进行下推后，执行引擎层还需要基于remainingExpression进一步过滤。
+         */
         private final TupleDomain<T> tupleDomain;
         private final RowExpression remainingExpression;
 

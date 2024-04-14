@@ -14,6 +14,7 @@
 package com.facebook.presto.execution.buffer;
 
 import com.facebook.presto.execution.Lifespan;
+import com.facebook.presto.execution.SqlTaskManager;
 import com.facebook.presto.execution.StateMachine;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
@@ -202,6 +203,10 @@ public class PartitionedOutputBuffer
         }
         List<SerializedPageReference> serializedPageReferences = references.build();
 
+        /**
+         * 如果执行到这里时，已经发生了{@link #fail()}，则下面的updateMemoryUsage操作将没有任何效果，因为memoryManager
+         * 已经close了。换句话说，这里新加入的pages虽然占用了heap空间，但它们不会统计到memory context中。
+         */
         // reserve memory
         memoryManager.updateMemoryUsage(bytesAdded);
 
@@ -246,6 +251,10 @@ public class PartitionedOutputBuffer
         partitions.get(outputBufferId.getId()).acknowledgePages(sequenceId);
     }
 
+    /**
+     * 当{@link #fail()}执行后，bufferId对应的consumer因为crash而没有调用这个方法，那么bufferId
+     * 对应的{@link ClientBuffer}还能得到清理吗？
+     */
     @Override
     public void abort(OutputBufferId bufferId)
     {
@@ -256,6 +265,10 @@ public class PartitionedOutputBuffer
         checkFlushComplete();
     }
 
+    /**
+     * 关于setNoMorePages()的调用时机，参见：
+     * {@link com.facebook.presto.execution.SqlTaskExecution#checkTaskCompletion()}
+     */
     @Override
     public void setNoMorePages()
     {
@@ -273,7 +286,12 @@ public class PartitionedOutputBuffer
     {
         // ignore destroy if the buffer already in a terminal state.
         if (state.setIf(FINISHED, oldState -> !oldState.isTerminal())) {
+            /**
+             * 调用{@link ClientBuffer#destroy()}后，ClientBuffer将清理内存中的pages，同时不再接受新的pages。
+             * 后续对ClientBuffer的读取，将直接返回bufferComplete为true的空结构，即告诉消费端没有更多数据了。
+             */
             partitions.forEach(ClientBuffer::destroy);
+
             memoryManager.setNoBlockOnFull();
             forceFreeMemory();
         }
@@ -282,11 +300,47 @@ public class PartitionedOutputBuffer
     @Override
     public void fail()
     {
+        /**
+         * {@link com.facebook.presto.execution.TaskState}的终态分为4种情况:
+         * a) FINISHED => 任务成功完成且output被完全消费
+         * b) CANCELED => 任务被用户提前终止且已有的output被完全消费（发生在stage被cancel）
+         * c) ABORTED  => query中其他任务FAILED 或者 query被整个cancel
+         * d) FAILED   => 当前任务执行失败
+         *
+         * 任务状态FINISHED和CANCELED 将对应于 {@link BufferState#FINISHED}，而ABORTED和FAILED
+         * 则对应于 {@link BufferState#FAILED}。
+         *
+         * 参考：
+         * {@link com.facebook.presto.execution.SqlQueryExecution#cancelStage}
+         * {@link com.facebook.presto.execution.SqlQueryExecution#cancelQuery}
+         */
         // ignore fail if the buffer already in a terminal state.
         if (state.setIf(FAILED, oldState -> !oldState.isTerminal())) {
             memoryManager.setNoBlockOnFull();
+
+            /**
+             * 调用这个操作后，可以将之前output buffer占用的内存归还给底层MemoryPool（但这个仅仅是数字上的统计），但pages真正
+             * 占用的内存此时并不能回收（{@link ClientBuffer#destroy()}尚未执行，需要等到消费端进行abortResults操作）。因次，
+             * MemoryPool此时看到的可用内存是水份的。
+             *
+             * 参考:
+             * {@link com.facebook.presto.server.TaskResource#abortResults}
+             */
             forceFreeMemory();
-            // DO NOT destroy buffers or set no more pages.  The coordinator manages the teardown of failed queries.
+
+            // DO NOT destroy buffers or set no more pages. The coordinator manages the teardown of failed queries.
+            /**
+             * 如果coordinator此时crash并重启的话，{@link #abort(OutputBufferId)}得不到执行，那么{@link #partitions}对应
+             * 的ClientBuffer还能被清理吗？
+             *
+             * 答案是：能，虽然{@link ClientBuffer#destroy()}不会再执行，但GC会帮我们回收掉{@link ClientBuffer#pages}，因为
+             * {@link SqlTaskManager#failAbandonedTasks()}和{@link SqlTaskManager#removeOldTasks()}会保证清除掉残留的
+             * SqlTask，并最终GC掉和它相关的其他资源。
+             *
+             * 尽管调用{@link ClientBuffer#destroy()}可以更及时地释放pages，但目前的实现会导致消费端（即从当前task的output读取
+             * 数据的下游）误以为已经成功消费了所有的数据（因为{@link ClientBuffer#destroy()}会设置noMorePages）。因此，这里需要
+             * 避免下游任务非预期的成功退出，即block住下游任务的消费，让它等待coordinator进行abort操作。
+             */
         }
     }
 

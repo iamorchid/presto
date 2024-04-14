@@ -287,6 +287,10 @@ public class DispatchManager
             // prepare query
             AnalyzerOptions analyzerOptions = createAnalyzerOptions(session, session.getWarningCollector());
             AnalyzerProvider analyzerProvider = analyzerProviderManager.getAnalyzerProvider(getAnalyzerType(session));
+
+            /**
+             * 这里对query进行词法分析
+             */
             preparedQuery = analyzerProvider.getQueryPreparer().prepareQuery(analyzerOptions, query, session.getPreparedStatements(), session.getWarningCollector());
             query = preparedQuery.getFormattedQuery().orElse(query);
 
@@ -321,7 +325,10 @@ public class DispatchManager
                     session.getWarningCollector(),
                     (dq) -> resourceGroupManager.submit(dq, selectionContext, queryExecutor));
 
+            // queryAdded为false，表示之前已经添加到了queryTracker。否则，为初次添加到queryTracker。
             boolean queryAdded = queryCreated(dispatchQuery);
+
+            // dispatchQuery.isDone()为true，表示query已经结束（比如遇到错误）
             if (queryAdded && !dispatchQuery.isDone()) {
                 try {
                     clusterStatusSender.registerQuery(dispatchQuery);

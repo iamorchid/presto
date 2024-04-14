@@ -21,6 +21,7 @@ import javax.validation.constraints.NotNull;
 public class MemoryConfig
 {
     private int splitsPerNode = Runtime.getRuntime().availableProcessors();
+    private int splitsPerBucket = 1;
     private DataSize maxDataPerNode = new DataSize(128, DataSize.Unit.MEGABYTE);
 
     @NotNull
@@ -33,6 +34,18 @@ public class MemoryConfig
     public MemoryConfig setSplitsPerNode(int splitsPerNode)
     {
         this.splitsPerNode = splitsPerNode;
+        return this;
+    }
+
+    public int getSplitsPerBucket()
+    {
+        return splitsPerBucket;
+    }
+
+    @Config("memory.splits-per-bucket")
+    public MemoryConfig setSplitsPerBucket(int splitsPerBucket)
+    {
+        this.splitsPerBucket = splitsPerBucket;
         return this;
     }
 

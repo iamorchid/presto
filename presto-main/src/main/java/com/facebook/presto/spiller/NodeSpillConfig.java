@@ -18,11 +18,16 @@ import io.airlift.units.DataSize;
 
 import javax.validation.constraints.NotNull;
 
+/**
+ * 参考：
+ * {@link com.facebook.presto.memory.NodeMemoryConfig}
+ * {@link com.facebook.presto.memory.MemoryManagerConfig}
+ */
 public class NodeSpillConfig
 {
-    private DataSize maxSpillPerNode = new DataSize(100, DataSize.Unit.GIGABYTE);
-    private DataSize maxRevocableMemoryPerNode = new DataSize(16, DataSize.Unit.GIGABYTE);
-    private DataSize queryMaxSpillPerNode = new DataSize(100, DataSize.Unit.GIGABYTE);
+    private DataSize maxSpillPerNode = new DataSize(100, DataSize.Unit.GIGABYTE); // node-level的限制
+    private DataSize maxRevocableMemoryPerNode = new DataSize(16, DataSize.Unit.GIGABYTE); // query-level的限制
+    private DataSize queryMaxSpillPerNode = new DataSize(100, DataSize.Unit.GIGABYTE);  // query-level的限制
     private DataSize tempStorageBufferSize = new DataSize(4, DataSize.Unit.KILOBYTE);
 
     private boolean spillCompressionEnabled;

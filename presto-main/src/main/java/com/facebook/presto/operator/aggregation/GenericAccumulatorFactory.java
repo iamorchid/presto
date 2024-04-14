@@ -255,6 +255,10 @@ public class GenericAccumulatorFactory
     {
         GroupedAccumulator accumulator;
 
+        /**
+         * 通过{@link com.facebook.presto.sql.planner.iterative.rule.MultipleDistinctAggregationToMarkDistinct}知道，如果
+         * distinct aggregation可以被MarkDistinctNode取代时，则Aggregation的distinct属性将会被清除。
+         */
         if (hasDistinct()) {
             // channel 0 will contain the distinct mask
             accumulator = instantiateGroupedAccumulator(

@@ -32,6 +32,8 @@ public class MemoryRevokingSchedulerUtils
             public Long visitOperatorContext(OperatorContext operatorContext, Void context)
             {
                 if (operatorContext.isMemoryRevokingRequested()) {
+                    // 此时说明operator还没有处理完成上一次请求的revoking操作。另外，如果operator处理完了
+                    // revoking (比如将数据全部spill到文件中)，则会将revocable bytes置为0。
                     return operatorContext.getReservedRevocableBytes();
                 }
                 return 0L;

@@ -143,6 +143,11 @@ public class ConnectorTableLayout
      * the partition columns will be contained within a single split (i.e., partitions cannot
      * straddle multiple splits)
      */
+    /**
+     * 参考{@link com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.Visitor#visitTableScan}
+     * 如何为StreamProperties设置partitioning columns。注意，一个Driver消费的数据流即为stream，当前实现而言，一个TableScan
+     * 的split只会被一个Driver消费（参考{@link com.facebook.presto.execution.SqlTaskExecution}）。
+     */
     public Optional<Set<ColumnHandle>> getStreamPartitioningColumns()
     {
         return streamPartitioningColumns;

@@ -173,6 +173,9 @@ public class LocalExchangeSource
         }
     }
 
+    /**
+     * 该方法主要由{@link LocalExchange#checkAllSinksComplete()}进行调用。
+     */
     public void finish()
     {
         checkNotHoldsLock();

@@ -133,6 +133,7 @@ public final class WorkProcessorUtils
                         return ProcessState.yield();
                     }
 
+                    // 需要保证所有的排序队列对遍历完成，才能从PriorityQueue中获取最优的结果
                     if (processorIterator.hasNext()) {
                         processor = requireNonNull(processorIterator.next());
                         continue;
@@ -143,6 +144,8 @@ public final class WorkProcessorUtils
                     }
 
                     ElementAndProcessor<T> elementAndProcessor = queue.poll();
+                    // 记住当前返回的最优结果来自的processor，下次调用process时，需要从该processor
+                    // 读取一条结果放入PriorityQueue中。
                     processor = elementAndProcessor.getProcessor();
                     return ProcessState.ofResult(elementAndProcessor.getElement());
                 }

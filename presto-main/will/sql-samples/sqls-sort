@@ -1,0 +1,178 @@
+## Logical Plan -> Distribution Plan
+
+LimitPushDown#visitSort -> TopNNode (SINGLE)
+
+PruneUnreferencedOutputs#visitTopN -> TopNNode (SINGLE)
+
+Memo#insertChildrenAndRewrite -> TopNNode (SINGLE)
+
+
+CreatePartialTopN#apply -> {
+  TopNNode (PARTIAL)
+  TopNNode (FINAL)
+}
+
+AddExchanges#visitTopN -> {
+  ExchangeNode (scope: REMOTE_STREAMING)
+}
+
+
+AddLocalExchanges#visitTopN -> {
+  ExchangeNode (scope: LOCAL)  
+}
+
+
+PlanFragmenter#createRemoteStreamingExchange
+
+
+SystemPartitioningHandle
+Function<PartitioningHandle, NodePartitionMap> partitioningCache
+PartitioningHandle
+PartitioningScheme
+NodePartitionMap
+OutputBuffers
+OutputBuffer
+
+
+
+{
+    // all sources are remote
+    NodePartitionMap nodePartitionMap = partitioningCache.apply(plan.getFragment().getPartitioning());
+    List<InternalNode> partitionToNode = nodePartitionMap.getPartitionToNode();
+    // todo this should asynchronously wait a standard timeout period before failing
+    checkCondition(!partitionToNode.isEmpty(), NO_NODES_AVAILABLE, "No worker nodes available");
+    return new FixedCountScheduler(stageExecution, partitionToNode);
+}
+
+
+  public NodePartitionMap(List<InternalNode> partitionToNode, int[] bucketToPartition, ToIntFunction<Split> splitToBucket, boolean cacheable)
+  {
+      this.bucketToPartition = requireNonNull(bucketToPartition, "bucketToPartition is null");
+      this.partitionToNode = ImmutableList.copyOf(requireNonNull(partitionToNode, "partitionToNode is null"));
+      this.splitToBucket = requireNonNull(splitToBucket, "splitToBucket is null");
+      this.cacheable = cacheable;
+  }
+
+-------------------------------------------------------------------------------------------------------------------------------
+
+
+
+explain 说明：https://prestodb.io/docs/current/sql/explain.html
+
+explain (type distributed)
+select shippriority + 10 as prio, shippriority + 10, custkey as customerId, orderkey
+from orders
+order by (shippriority + 10) + 10, prio * 1.5, customerId, orderkey, totalprice * 3
+limit 5;
+
+
+Logical Plan                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[prio, _col1, customerId, orderkey] => [expr:bigint, expr:bigint, custkey:bigint, orderkey:bigint]                                                                                                             
+         prio := expr (2:21)                                                                                                                                                                                            
+         _col1 := expr (2:48)                                                                                                                                                                                           
+         customerId := custkey (2:54)                                                                                                                                                                                   
+     - Project[projectLocality = LOCAL] => [expr:bigint, custkey:bigint, orderkey:bigint]                                                                                                                               
+         - TopN[5 by (expr_3 ASC_NULLS_LAST, expr_4 ASC_NULLS_LAST, custkey ASC_NULLS_LAST, orderkey ASC_NULLS_LAST, expr_6 ASC_NULLS_LAST)] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, e
+             - LocalExchange[SINGLE] () => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, expr_6:double, expr:bigint]                                                                           
+                 - RemoteStreamingExchange[GATHER] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, expr_6:double, expr:bigint]                                                                
+                     - TopNPartial[5 by (expr_3 ASC_NULLS_LAST, expr_4 ASC_NULLS_LAST, custkey ASC_NULLS_LAST, orderkey ASC_NULLS_LAST, expr_6 ASC_NULLS_LAST)] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint,
+                         - Project[projectLocality = LOCAL] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, expr_6:double, expr:bigint]                                                       
+                                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                          
+                                 expr_3 := ((shippriority) + (BIGINT'10')) + (BIGINT'10') (3:9)                                                                                                                         
+                                 expr_4 := (CAST(expr AS decimal(19,0))) * (DECIMAL'1.5') (2:23)                                                                                                                        
+                                 expr_6 := (totalprice) * (DOUBLE'3.0') (3:9)                                                                                                                                           
+                             - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout='Optional[example:tpch:orders]'}, projectLocality = LOCAL] => [expr:bigint, custkey
+                                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                   
+                                     expr := (shippriority) + (BIGINT'10') (3:8)                                                                                                                                        
+                                     totalprice := ExampleColumnHandle{connectorId=example, columnName=totalprice, columnType=double, ordinalPosition=3} (3:6)                                                          
+                                     orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (3:6)                                                              
+                                     custkey := ExampleColumnHandle{connectorId=example, columnName=custkey, columnType=bigint, ordinalPosition=1} (3:6)                                                                
+                                     shippriority := ExampleColumnHandle{connectorId=example, columnName=shippriority, columnType=bigint, ordinalPosition=7} (3:6)                                                      
+                                                                                                                                                                                                                        
+
+Distributed Plan
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                    
+     Output layout: [expr, expr, custkey, orderkey]                                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                                                     
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                      
+     - Output[prio, _col1, customerId, orderkey] => [expr:bigint, expr:bigint, custkey:bigint, orderkey:bigint]                                                                                                         
+             prio := expr (1:48)                                                                                                                                                                                        
+             _col1 := expr (1:75)                                                                                                                                                                                       
+             customerId := custkey (1:81)                                                                                                                                                                               
+         - Project[projectLocality = LOCAL] => [expr:bigint, custkey:bigint, orderkey:bigint]                                                                                                                           
+             - TopN[5 by (expr_3 ASC_NULLS_LAST, expr_4 ASC_NULLS_LAST, custkey ASC_NULLS_LAST, orderkey ASC_NULLS_LAST, expr_6 ASC_NULLS_LAST)] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigin
+                 - LocalExchange[SINGLE] () => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, expr_6:double, expr:bigint]                                                                       
+                     - RemoteSource[1] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, expr_6:double, expr:bigint]                                                                            
+                                                                                                                                                                                                                        
+ Fragment 1 [SOURCE]                                                                                                                                                                                                    
+     Output layout: [expr_3, expr_4, custkey, orderkey, expr_6, expr]                                                                                                                                                   
+     Output partitioning: SINGLE []                                                                                                                                                                                     
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                      
+     - TopNPartial[5 by (expr_3 ASC_NULLS_LAST, expr_4 ASC_NULLS_LAST, custkey ASC_NULLS_LAST, orderkey ASC_NULLS_LAST, expr_6 ASC_NULLS_LAST)] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint
+         - Project[projectLocality = LOCAL] => [expr_3:bigint, expr_4:decimal(21,1), custkey:bigint, orderkey:bigint, expr_6:double, expr:bigint]                                                                       
+                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                                          
+                 expr_3 := ((shippriority) + (BIGINT'10')) + (BIGINT'10') (1:121)                                                                                                                                       
+                 expr_4 := (CAST(expr AS decimal(19,0))) * (DECIMAL'1.5') (1:50)                                                                                                                                        
+                 expr_6 := (totalprice) * (DOUBLE'3.0') (1:121)                                                                                                                                                         
+             - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout='Optional[example:tpch:orders]'}, grouped = false, projectLocality = LOCAL] => [expr:bigint, custke
+                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                   
+                     expr := (shippriority) + (BIGINT'10') (1:120)                                                                                                                                                      
+                     totalprice := ExampleColumnHandle{connectorId=example, columnName=totalprice, columnType=double, ordinalPosition=3} (1:118)                                                                        
+                     orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:118)                                                                            
+                     custkey := ExampleColumnHandle{connectorId=example, columnName=custkey, columnType=bigint, ordinalPosition=1} (1:118)                                                                              
+                     shippriority := ExampleColumnHandle{connectorId=example, columnName=shippriority, columnType=bigint, ordinalPosition=7} (1:118)                                                                    
+                                                                                                                                                                                                                        
+                                                                                                                                                                                                                        
+
+
+20221109_144710_00007_5879n.0.0.0
+20221109_144710_00007_5879n.1.0.0
+
+
+partitioningScheme = {PartitioningScheme@21811} "PartitioningScheme{partitioning=Partitioning{handle=SINGLE, arguments=[]}, outputLayout=[expr_3, expr_4, custkey, orderkey, expr_6, expr], hashChannel=Optional.empty, replicateNullsAndAny=false, bucketToPartition=Optional[[I@11c74f66]}"
+ partitioning = {Partitioning@21901} "Partitioning{handle=SINGLE, arguments=[]}"
+  handle = {PartitioningHandle@21905} "SINGLE"
+   connectorId = {Optional@16150} "Optional.empty"
+   transactionHandle = {Optional@16150} "Optional.empty"
+   connectorHandle = {SystemPartitioningHandle@21917} "SINGLE"
+    partitioning = {SystemPartitioningHandle$SystemPartitioning@22051} "SINGLE"
+    function = {SystemPartitioningHandle$SystemPartitionFunction$1@22052} "SINGLE"
+  arguments = {RegularImmutableList@20634}  size = 0
+ outputLayout = {RegularImmutableList@21815}  size = 6
+  0 = {VariableReferenceExpression@21908} "expr_3"
+  1 = {VariableReferenceExpression@21909} "expr_4"
+  2 = {VariableReferenceExpression@21910} "custkey"
+  3 = {VariableReferenceExpression@21911} "orderkey"
+  4 = {VariableReferenceExpression@21912} "expr_6"
+  5 = {VariableReferenceExpression@21913} "expr"
+ hashColumn = {Optional@16150} "Optional.empty"
+ replicateNullsAndAny = false
+ bucketToPartition = {Optional@21902} "Optional[[I@11c74f66]"
+  value = {int[1]@21916} [0]
+   0 = 0
+
+physicalOperation = {LocalExecutionPlanner$PhysicalOperation@21816} 
+ operatorFactories = {RegularImmutableList@21957}  size = 3
+  0 = {ScanFilterAndProjectOperator$ScanFilterAndProjectOperatorFactory@21797} 
+  1 = {FilterAndProjectOperator$FilterAndProjectOperatorFactory@21798} 
+  2 = {TopNOperator$TopNOperatorFactory@21799} 
+ layout = {RegularImmutableMap@21958}  size = 6
+  {VariableReferenceExpression@21971} "expr_3" -> {Integer@21972} 0
+  {VariableReferenceExpression@21973} "expr_4" -> {Integer@21974} 1
+  {VariableReferenceExpression@21975} "custkey" -> {Integer@21976} 2
+  {VariableReferenceExpression@21979} "orderkey" -> {Integer@21980} 3
+  {VariableReferenceExpression@21977} "expr_6" -> {Integer@21978} 4
+  {VariableReferenceExpression@21981} "expr" -> {Integer@21982} 5
+ types = {RegularImmutableList@21959}  size = 6
+  0 = {BigintType@21986} "bigint"
+  1 = {LongDecimalType@21987} "decimal(21,1)"
+  2 = {BigintType@21986} "bigint"
+  3 = {BigintType@21986} "bigint"
+  4 = {DoubleType@21988} "double"
+  5 = {BigintType@21986} "bigint"
+ pipelineExecutionStrategy = {PipelineExecutionStrategy@16149} "UNGROUPED_EXECUTION"
+  name = "UNGROUPED_EXECUTION"
+  ordinal = 0
+

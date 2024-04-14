@@ -198,6 +198,7 @@ public class QueryTracker<T extends TrackedQuery>
     {
         tryGetQuery(queryId)
                 .ifPresent(expirationQueue::add);
+
     }
 
     public long getRunningTaskCount()
@@ -219,10 +220,10 @@ public class QueryTracker<T extends TrackedQuery>
             if (query.isDone()) {
                 continue;
             }
-            Duration queryMaxRunTime = getQueryMaxRunTime(query.getSession());
+            Duration queryMaxRunTime = getQueryMaxRunTime(query.getSession()); // 默认 100d
             QueryLimit<Duration> queryMaxExecutionTime = getMinimum(
-                    createDurationLimit(getQueryMaxExecutionTime(query.getSession()), QUERY),
-                    query.getResourceGroupQueryLimits()
+                    createDurationLimit(getQueryMaxExecutionTime(query.getSession()), QUERY), // 默认 100d
+                    query.getResourceGroupQueryLimits() // 默认不会定义这个
                             .flatMap(ResourceGroupQueryLimits::getExecutionTimeLimit)
                             .map(rgLimit -> createDurationLimit(rgLimit, RESOURCE_GROUP)).orElse(null));
             Optional<DateTime> executionStartTime = query.getExecutionStartTime();
@@ -265,7 +266,7 @@ public class QueryTracker<T extends TrackedQuery>
 
     /**
      *  When cluster reaches max tasks limit and also a single query
-     *  exceeds a threshold,  kill this query
+     *  exceeds a threshold, kill this query
      */
     @VisibleForTesting
     void enforceTaskLimits()
@@ -350,7 +351,7 @@ public class QueryTracker<T extends TrackedQuery>
             // around for a while in case clients come back asking for status
             QueryId queryId = query.getQueryId();
 
-            log.debug("Remove query %s", queryId);
+            log.warn("Remove query %s: %s ", query.getClass().getName(), queryId);
             queries.remove(queryId);
             expirationQueue.remove(query);
         }

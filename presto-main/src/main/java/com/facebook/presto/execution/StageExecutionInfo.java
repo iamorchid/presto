@@ -298,6 +298,9 @@ public class StageExecutionInfo
 
     public boolean isFinal()
     {
+        /**
+         * 这里要求所有的task的{@link TaskInfo}都为final，不仅仅是{@link RemoteTask#getTaskStatus()}为done。
+         */
         return state.isDone() && tasks.stream().allMatch(taskInfo -> taskInfo.getTaskStatus().getState().isDone());
     }
 

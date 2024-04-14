@@ -121,6 +121,12 @@ public class Backoff
 
         lastFailureTime = now;
         failureCount++;
+
+        /**
+         * Backoff的使用可以有两种模式：
+         * 1）只调用{@link #success()} 或者 {@link #failure()}
+         * 2) 成对调用{@link #startRequest()} / {@link #success()} 或者 {@link #startRequest()} / {@link #failure()}
+         */
         if (lastRequestStart != 0) {
             failureRequestTimeTotal += now - lastRequestStart;
             lastRequestStart = 0;

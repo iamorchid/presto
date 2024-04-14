@@ -42,6 +42,10 @@ public final class NodeAssignmentStats
         this.stageQueuedSplitInfo = new HashMap<>(nodeMapSize);
 
         for (RemoteTask task : existingTasks) {
+            /**
+             * 由{@link com.facebook.presto.execution.SqlStageExecution#scheduleSplits}可以知道，在调度
+             * {@link com.facebook.presto.metadata.Split}时，同一个node有且仅仅创建一个task。
+             */
             checkArgument(stageQueuedSplitInfo.put(task.getNodeId(), new PendingSplitInfo(task.getQueuedPartitionedSplitsInfo(), task.getUnacknowledgedPartitionedSplitCount())) == null, "A single stage may not have multiple tasks running on the same node");
         }
 

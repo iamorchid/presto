@@ -94,13 +94,13 @@ public interface TaskManager
             Optional<TableWriteInfo> tableWriteInfo);
 
     /**
-     * Cancels a task.  If the task does not already exist, is is created and then
+     * Cancels a task.  If the task does not already exist, it is created and then
      * canceled.
      */
     TaskInfo cancelTask(TaskId taskId);
 
     /**
-     * Aborts a task.  If the task does not already exist, is is created and then
+     * Aborts a task.  If the task does not already exist, it is created and then
      * aborted.
      */
     TaskInfo abortTask(TaskId taskId);
