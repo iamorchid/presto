@@ -204,6 +204,8 @@ class QueryPlanner
         RelationPlan fromRelationPlan = builder.getRelationPlan();
 
         builder = filter(builder, analysis.getWhere(node), node);
+        // 可以理解下面SQL整个语义解析以及plan的过程：
+        // select concat(clerk, '-test'), max(orderkey) + 20 from orders group by clerk limit 1;
         builder = aggregate(builder, node);
         builder = filter(builder, analysis.getHaving(node), node);
 
@@ -217,19 +219,25 @@ class QueryPlanner
                 // ORDER BY requires both output and source fields to be visible if there are no aggregations
                 builder = project(builder, outputs, fromRelationPlan);
 
-                /**
-                 * 下面的planBuilderFor会切换{@link RelationPlan}，这里将outputs替换为新plan的symbol引用。
-                 */
+                // 将outputs替换为新plan builder中root (即ProjectNode)的symbol引用
                 outputs = toSymbolReferences(computeOutputs(builder, outputs));
 
-                /**
-                 * 这里的操作主要是切换{@link PlanBuilder#translations}，更准确地说是切换{@link TranslationMap}
-                 * 中的{@link RelationPlan}，使之采用order by的{@link Scope}，这样可以解析order by中对select部
-                 * 分的字段引用。
-                 */
+                // 切换{@link RelationPlan}以采用order by的{@link Scope}，这样可以解析order by中对select部分的字段引用。
                 builder = planBuilderFor(builder, analysis.getScope(node.getOrderBy().get()));
             }
             else {
+                /**
+                 * 下面的语句能工作: orderkey / 100 为 complex aggregate by expression
+                 * select shippriority, count(orderkey) as cnt from orders group by clerk, shippriority, orderkey / 100 order by cnt desc, clerk, orderkey / 100 limit 1;
+                 *
+                 * 但下面的语句会报错: '(orderkey / 10)' must be an aggregate expression or appear in GROUP BY clause
+                 * select shippriority, count(orderkey) as cnt from orders group by clerk, shippriority, orderkey / 100 order by cnt desc, clerk, orderkey / 10  limit 1;
+                 *
+                 * 下面group by和order by中的orderkey + 10该分别怎么理解?
+                 * select clerk, shippriority, count(orderkey) as cnt, max(orderkey) as orderkey from orders group by clerk, shippriority, orderkey + 10 order by cnt desc, clerk, orderkey + 10, max(comment)  limit 1;
+                 *
+                 * orderByAggregatesd的初始化参见{@link com.facebook.presto.sql.analyzer.StatementAnalyzer.Visitor#computeAndAssignOrderByScopeWithAggregation}
+                 */
                 // ORDER BY requires output fields, groups and translated aggregations to be visible for queries with aggregation
                 List<Expression> orderByAggregates = analysis.getOrderByAggregates(node.getOrderBy().get());
                 builder = project(builder, Iterables.concat(outputs, orderByAggregates));
@@ -245,12 +253,20 @@ class QueryPlanner
 
         List<Expression> orderBy = analysis.getOrderByExpressions(node);
         builder = handleSubqueries(builder, node, orderBy);
+
+        /**
+         * 这一步是将order by中表达式计算挪到了project node中处理, 这样order by中的表达式
+         * 转换为对project node的输出的引用即. 另外，这里也需要保留outputs, 因为下面生成最
+         * 终的{@link RelationPlan}时, 需要用到.
+         */
         builder = project(builder, Iterables.concat(orderBy, outputs));
 
         builder = distinct(builder, node);
         builder = sort(builder, node);
         builder = offset(builder, node.getOffset());
         builder = limit(builder, node);
+
+        // 之前的builder包含了orderBy表达式的输出, 这里需要将其去掉
         builder = project(builder, outputs);
 
         return new RelationPlan(builder.getRoot(), analysis.getScope(node), computeOutputs(builder, outputs));
@@ -497,7 +513,7 @@ class QueryPlanner
         Assignments.Builder projections = Assignments.builder();
         for (Expression expression : expressions) {
             /**
-             * 这里允许将上一级PlanNode输出 同时 暴露到新PlanNode的输出
+             * 这里允许将上一级PlanNode输出 暴露/传递 到新PlanNode的输出
              */
             if (expression instanceof SymbolReference) {
                 VariableReferenceExpression variable = toVariableReference(variableAllocator, expression);
@@ -711,6 +727,15 @@ class QueryPlanner
         List<Set<FieldId>> columnOnlyGroupingSets = ImmutableList.of(ImmutableSet.of());
         List<List<VariableReferenceExpression>> groupingSets = ImmutableList.of(ImmutableList.of());
 
+        /**
+         * select ... from table group by distinct f1, f2, grouping sets ( (f31) , (f32) ), rollup (f4, f5)
+         * 等价于 (f1和f2可以使用任意的表达式, 但SQL中grouping sets, cube, rollup只能使用单个field):
+         * select ... from table group by distinct
+         *   grouping sets( (f1) )
+         *   grouping sets( (f2) )
+         *   grouping sets( (f31) , (f32) )
+         *   grouping sets( (f4,f5), (f4), () )
+         */
         if (node.getGroupBy().isPresent()) {
             // For the purpose of "distinct", we need to canonicalize column references that may have varying
             // syntactic forms (e.g., "t.a" vs "a"). Thus we need to enumerate grouping sets based on the underlying
@@ -719,6 +744,9 @@ class QueryPlanner
             // The catch is that simple group-by expressions can be arbitrary expressions (this is a departure from the SQL specification).
             // But, they don't affect the number of grouping sets or the behavior of "distinct" . We can compute all the candidate
             // grouping sets in terms of fieldId, dedup as appropriate and then cross-join them with the complex expressions.
+            /**
+             * 当group by中只存在complex expressions, enumerateGroupingSets会返回ImmutableList.of(ImmutableSet.of())
+             */
             Analysis.GroupingSetAnalysis groupingSetAnalysis = analysis.getGroupingSets(node);
             columnOnlyGroupingSets = enumerateGroupingSets(groupingSetAnalysis);
 
@@ -728,7 +756,7 @@ class QueryPlanner
                         .collect(toImmutableList());
             }
 
-            // add in the complex expressions an turn materialize the grouping sets in terms of plan columns
+            // add in the complex expressions and materialize the grouping sets in terms of plan columns
             ImmutableList.Builder<List<VariableReferenceExpression>> groupingSetBuilder = ImmutableList.builder();
             for (Set<FieldId> groupingSet : columnOnlyGroupingSets) {
                 ImmutableList.Builder<VariableReferenceExpression> columns = ImmutableList.builder();
@@ -862,6 +890,10 @@ class QueryPlanner
         partialSets.addAll(groupingSetAnalysis.getOrdinarySets());
 
         if (partialSets.isEmpty()) {
+            /**
+             * 这种情况表明group by中只有{@link Analysis.GroupingSetAnalysis#complexExpressions}
+             */
+            checkArgument(!groupingSetAnalysis.getComplexExpressions().isEmpty(), "complex expressions not present");
             return ImmutableList.of(ImmutableSet.of());
         }
 

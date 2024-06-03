@@ -127,10 +127,10 @@ public class NodePartitioningManager
 
     /**
      * 这里解决的问题是：
-     * 1. 本fragment应该采用多少个task进行并发处理，即使用多少个partitions
+     * 1. 当前stage应该采用多少个task进行并发处理，即使用多少个partitions
      * 2. 每个partition应该调度到那个node上运行（决定着每个node读取上游的输出那个output buffer），即partitionToNode
      * 3. 每个split应该调度到那个node上执行（即{@link NodePartitionMap#asBucketNodeMap()}
-     * 4. 输出给下游消费的数据应该如何对应到不同的partition，即bucketToPartition
+     * 4. 上游stage提供给本stage的数据如何对应到不同的partition，即bucketToPartition
      */
     public NodePartitionMap getNodePartitioningMap(Session session, PartitioningHandle partitioningHandle, Optional<Predicate<Node>> nodePredicate)
     {

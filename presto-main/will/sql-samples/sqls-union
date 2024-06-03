@@ -1,0 +1,68 @@
+explain (type distributed)
+-- 默认会使用union第一张表的字段作为union的输出字段名称
+select orderstatus, count(comment) from
+(
+    (select orderstatus, comment from orders)
+      union all
+    (select linestatus, comment from lineitem)
+)
+group by orderstatus;
+
+                                                                                                                              Query Plan
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]
+     Output layout: [expr_20, count]
+     Output partitioning: SINGLE []
+     Stage Execution Strategy: UNGROUPED_EXECUTION
+     - Output[PlanNodeId 21][orderstatus, _col1] => [expr_20:varchar(1), count:bigint]
+             orderstatus := expr_20 (3:8)
+             _col1 := count (3:21)
+         - RemoteSource[1] => [expr_20:varchar(1), count:bigint]
+
+ Fragment 1 [HASH]
+     Output layout: [expr_20, count]
+     Output partitioning: SINGLE []
+     Stage Execution Strategy: UNGROUPED_EXECUTION
+     - Project[PlanNodeId 591][projectLocality = LOCAL] => [expr_20:varchar(1), count:bigint]
+         - Aggregate(FINAL)[expr_20][$hashvalue][PlanNodeId 16] => [expr_20:varchar(1), $hashvalue:bigint, count:bigint]
+                 count := "presto.default.count"((count_36)) (3:21)
+             - LocalExchange[PlanNodeId 529][HASH][$hashvalue] (expr_20) => [expr_20:varchar(1), count_36:bigint, $hashvalue:bigint]
+                 - Project[PlanNodeId 589][projectLocality = LOCAL] => [expr_20:varchar(1), count_36:bigint, $hashvalue_39:bigint]
+                         $hashvalue_39 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(expr_20), BIGINT'0')) (9:10)
+                     - Project[PlanNodeId 526][projectLocality = LOCAL] => [expr_20:varchar(1), count_36:bigint, $hashvalue_37:bigint]
+                             expr_20 := orderstatus (9:10)
+                         - RemoteSource[2] => [orderstatus:varchar(1), count_36:bigint, $hashvalue_37:bigint]
+                 - Project[PlanNodeId 590][projectLocality = LOCAL] => [expr_20:varchar(1), count_36:bigint, $hashvalue_42:bigint]
+                         $hashvalue_42 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(expr_20), BIGINT'0')) (9:10)
+                     - Project[PlanNodeId 528][projectLocality = LOCAL] => [expr_20:varchar(1), count_36:bigint, $hashvalue_40:bigint]
+                             expr_20 := linestatus (9:10)
+                         - RemoteSource[3] => [linestatus:varchar(1), count_36:bigint, $hashvalue_40:bigint]
+
+ Fragment 2 [tpch:orders:15000]
+     Output layout: [orderstatus, count_36, $hashvalue_38]
+     Output partitioning: HASH [orderstatus][$hashvalue_38]
+     Stage Execution Strategy: UNGROUPED_EXECUTION
+     - Aggregate(PARTIAL)[orderstatus][$hashvalue_38][PlanNodeId 536] => [orderstatus:varchar(1), $hashvalue_38:bigint, count_36:bigint]
+             count_36 := "presto.default.count"((comment)) (3:21)
+         - ScanProject[PlanNodeId 0,588][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderstatus:varchar(1), comment:varchar(79), $hashvalue_38:bigint]
+                 Estimates: {source: CostBasedSourceInfo, rows: 15,000 (351.56kB), cpu: 892,364.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (351.56kB), cpu: 1,919,728.00, memory: 0.00, network: 0.00}
+                 $hashvalue_38 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderstatus), BIGINT'0')) (9:10)
+                 orderstatus := tpch:orderstatus (5:39)
+                     :: [["F"], ["O"], ["P"]]
+                 comment := tpch:comment (5:39)
+
+ Fragment 3 [tpch:orders:15000]
+     Output layout: [linestatus, count_36, $hashvalue_41]
+     Output partitioning: HASH [linestatus][$hashvalue_41]
+     Stage Execution Strategy: UNGROUPED_EXECUTION
+     - Aggregate(PARTIAL)[linestatus][$hashvalue_41][PlanNodeId 542] => [linestatus:varchar(1), $hashvalue_41:bigint, count_36:bigint]
+             count_36 := "presto.default.count"((expr_19)) (3:21)
+         - ScanProject[PlanNodeId 5,10][table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [linestatus:varchar(1), expr_19:varchar(79), $hashvalue_41:bigint]
+                 Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.38MB), cpu: 2,260,296.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 60,175 (1.38MB), cpu: 6,472,546.00, memory: 0.00, network: 0.00}
+                 expr_19 := CAST(comment_8 AS varchar(79)) (7:26)
+                 $hashvalue_41 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(linestatus), BIGINT'0')) (7:13)
+                 linestatus := tpch:linestatus (7:38)
+                 comment_8 := tpch:comment (7:38)
+
+
+(1 row)

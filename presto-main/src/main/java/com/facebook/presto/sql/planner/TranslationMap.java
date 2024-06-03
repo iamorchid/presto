@@ -125,8 +125,8 @@ class TranslationMap
             public Expression rewriteExpression(Expression node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
             {
                 /**
-                 * 这里的操作会复用上一级PlanNode已有表达式的计算结果。比如上一级PlanNode已经计算了price*2（输出变量为expr)，
-                 * 下一级PlanNode进行 price*2+10 时，可以直接复用上级PlanNode已有结果，即重写为 expr+10 。
+                 * 这里的操作会复用上一级PlanNode已有表达式的计算结果。比如AggregationNode计算了max(orderkey)（输出变量为max)，
+                 * 下一级ProjectNode进行了 max(orderkey)+10 时，则可以重写为 max+10 。
                  */
                 if (expressionToVariables.containsKey(node)) {
                     return new SymbolReference(expression.getLocation(), expressionToVariables.get(node).getName());

@@ -1730,6 +1730,10 @@ class StatementAnalyzer
             List<Expression> sourceExpressions = new ArrayList<>(outputExpressions);
             node.getHaving().ifPresent(sourceExpressions::add);
 
+            /**
+             * select orderstatus, orderpriority, grouping(orderstatus, orderpriority) as g, count(*) from orders group by grouping sets ( (orderstatus), (orderpriority) ) order by g;
+             * 上面grouping(orderstatus, orderpriority)对应的即为grouping operations, 即返回的是一个bitmap, 表示对应的column是否存在于对应grouping set中.
+             */
             analyzeGroupingOperations(node, sourceExpressions, orderByExpressions);
             List<FunctionCall> aggregates = analyzeAggregations(node, sourceExpressions, orderByExpressions);
 
@@ -1742,6 +1746,25 @@ class StatementAnalyzer
                 analysis.setGroupByExpressions(node, ImmutableList.of());
             }
 
+            /**
+             * {@link verifyAggregations}中不会使用orderByScope的parent scope (即仅仅用到outputScope, 不会用到sourceScope)。
+             * 因此，即是在下面的if语句调整orderByScope的parent scope之前进行verify, 也不会有问题。因为 orderByScope#relation
+             * 以及 groupByExpressions就可以判断orderByExpressions是否合法。
+             * <p/>
+             *
+             * 下面几种order by表达式是有效的:
+             * select shippriority, count(orderkey) as cnt from orders group by clerk, shippriority, orderkey / 100 order by cnt desc, clerk, orderkey / 100 limit 1;
+             * select clerk from orders group by clerk order by lower(clerk), count(orderkey) limit 3;
+             *
+             * 下面的SQL是有效的:
+             * select (orderkey + 10) + 1, count(*) from orders group by orderkey + 10;
+             *
+             * 但下面的SQL是无效的:
+             * select (orderkey + 20) + 1, count(*) from orders group by orderkey + 10;
+             *
+             * 下面这个SQL当前presto不支持, 上面analyzeGroupBy会报错 (但老的presto支持, 同时mysql也支持的):
+             * select orderkey / 1000 as key, max(clerk) from orders group by key order by key;
+             */
             verifyAggregations(node, sourceScope, orderByScope, groupByExpressions, sourceExpressions, orderByExpressions);
 
             analyzeWindowFunctions(node, outputExpressions, orderByExpressions);
@@ -2491,6 +2514,13 @@ class StatementAnalyzer
                                 column = outputExpressions.get(toIntExact(ordinal - 1));
                             }
                             else {
+                                /**
+                                 * 下面这个SQL当前presto不支持, 但老的presto支持, 同时mysql也支持的:
+                                 * select orderkey / 1000 as key, max(clerk) from orders group by key order by key;
+                                 *
+                                 * 当前版本, 只能改写SQL为 (当前group by使用的是from对应的scope来解析字段信息):
+                                 * select orderkey / 1000 as key, max(clerk) from orders group by orderkey / 1000 order by key;
+                                 */
                                 analyzeExpression(column, scope);
                             }
 
@@ -2574,6 +2604,7 @@ class StatementAnalyzer
                     // expand * and T.*
                     Optional<QualifiedName> starPrefix = ((AllColumns) item).getPrefix();
 
+                    // * 只会使用sourceScope中的visible fields
                     for (Field field : sourceScope.getRelationType().resolveFieldsWithPrefix(starPrefix)) {
                         outputFields.add(Field.newUnqualified(node.getSelect().getLocation(), field.getName(), field.getType(), field.getOriginTable(), field.getOriginColumnName(), false));
                     }
@@ -2603,13 +2634,18 @@ class StatementAnalyzer
                         }
                     }
 
-                    if (!field.isPresent()) {
-                        if (name != null) {
-                            field = Optional.of(new Identifier(getLast(name.getOriginalParts())));
-                        }
+                    if (!field.isPresent() && name != null) {
+                        field = Optional.of(new Identifier(getLast(name.getOriginalParts())));
                     }
 
-                    outputFields.add(Field.newUnqualified(expression.getLocation(), field.map(Identifier::getValue), analysis.getType(expression), originTable, originColumn, column.getAlias().isPresent())); // TODO don't use analysis as a side-channel. Use outputExpressions to look up the type
+                    // 这里返回的field都是visible的 (即hidden为false)
+                    outputFields.add(Field.newUnqualified(
+                            expression.getLocation(),
+                            field.map(Identifier::getValue),
+                            analysis.getType(expression),
+                            originTable,
+                            originColumn,
+                            column.getAlias().isPresent()));
                 }
                 else {
                     throw new IllegalArgumentException("Unsupported SelectItem type: " + item.getClass().getName());
@@ -2646,6 +2682,7 @@ class StatementAnalyzer
                     .filter(expression -> hasReferencesToScope(expression, analysis, outputScope))
                     .collect(toImmutableList());
             List<Expression> orderByAggregationExpressions = orderByAggregationExpressionsBuilder.build().stream()
+                    // TODO 对于column reference类型的expression, 这里为何要保留?
                     .filter(expression -> !orderByExpressionsReferencingOutputScope.contains(expression) || analysis.isColumnReference(expression))
                     .collect(toImmutableList());
 
