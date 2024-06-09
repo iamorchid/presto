@@ -14,6 +14,7 @@
 package com.facebook.presto.operator.exchange;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.Page;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.operator.BucketPartitionFunction;
@@ -71,9 +72,6 @@ public class LocalExchange
     private boolean allSourcesFinished;
 
     @GuardedBy("this")
-    private boolean noMoreSinkFactories;
-
-    @GuardedBy("this")
     private final List<LocalExchangeSinkFactory> allSinkFactories;
 
     @GuardedBy("this")
@@ -96,11 +94,14 @@ public class LocalExchange
             Optional<Integer> partitionHashChannel,
             DataSize maxBufferedBytes)
     {
+        /**
+         * local {@link com.facebook.presto.sql.planner.plan.ExchangeNode#sources}的大小可以超过1,
+         * 此时每个source会有自己独立的LocalExchangeSinkFactory.
+         */
         this.allSinkFactories = Stream.generate(() -> new LocalExchangeSinkFactory(LocalExchange.this))
                 .limit(sinkFactoryCount)
                 .collect(toImmutableList());
         openSinkFactories.addAll(allSinkFactories);
-        noMoreSinkFactories();
 
         ImmutableList.Builder<LocalExchangeSource> sources = ImmutableList.builder();
         for (int i = 0; i < bufferCount; i++) {
@@ -145,7 +146,10 @@ public class LocalExchange
             };
         }
         else if (partitioning.equals(FIXED_HASH_DISTRIBUTION) || partitioning.getConnectorId().isPresent()) {
-            // partitioned exchange
+            /**
+             * 看起来所有的sinks理论上可以复用同一个PartitioningExchanger, 因为{@link PartitioningExchanger#accept(Page)}
+             * 是线程安全的. 但这样的话, PartitioningExchanger#accept会存在多线程竞争同步锁.
+             */
             exchangerSupplier = () -> new PartitioningExchanger(
                     buffers,
                     memoryManager,
@@ -212,14 +216,6 @@ public class LocalExchange
     public long getBufferedBytes()
     {
         return memoryManager.getBufferedBytes();
-    }
-
-    public synchronized LocalExchangeSinkFactory createSinkFactory()
-    {
-        checkState(!noMoreSinkFactories, "No more sink factories already set");
-        LocalExchangeSinkFactory newFactory = new LocalExchangeSinkFactory(this);
-        openSinkFactories.add(newFactory);
-        return newFactory;
     }
 
     public synchronized LocalExchangeSinkFactory getSinkFactory(LocalExchangeSinkFactoryId id)
@@ -299,23 +295,6 @@ public class LocalExchange
     }
 
     /**
-     * 要创建的{@link LocalExchangeSinkFactory}的数量由{@link com.facebook.presto.sql.planner.plan.ExchangeNode#sources}
-     * 的数量决定，它在一开始就是确定，下面方法在{@link #LocalExchange}构造函数中就会调用。
-     *
-     * 另外，LocalExchangeSinkFactory和LocalExchangeSinkOperatorFactory一一对应，由LocalExchangeSinkOperatorFactory创建的
-     * LocalExchangeSinkOperator，使用相同的LocalExchangeSinkFactory来创建LocalExchangeSink。
-     */
-    private void noMoreSinkFactories()
-    {
-        checkNotHoldsLock(this);
-
-        synchronized (this) {
-            noMoreSinkFactories = true;
-        }
-        checkAllSinksComplete();
-    }
-
-    /**
      * 当{@link LocalExchangeSinkOperator.LocalExchangeSinkOperatorFactory#noMoreOperators()}将会调用这个方法，这个发生在对应
      * 的pipeline不再需要创建新的Drivers（即{@link com.facebook.presto.operator.DriverFactory#noMoreDrivers()}）。
      */
@@ -334,7 +313,7 @@ public class LocalExchange
         checkNotHoldsLock(this);
 
         synchronized (this) {
-            if (!noMoreSinkFactories || !openSinkFactories.isEmpty() || !sinks.isEmpty()) {
+            if (!openSinkFactories.isEmpty() || !sinks.isEmpty()) {
                 return;
             }
         }
@@ -442,7 +421,11 @@ public class LocalExchange
             });
         }
 
-        public synchronized void closeSinks(LocalExchangeSinkFactoryId sinkFactoryId)
+        /**
+         * 对应的sinkFactory不会再产生新的sinks, 即对应的LocalExchangeSinkOperatorFactory已经完成
+         * 所在pipeline的所有Driver实例的LocalExchangeSinkOperator的生成.
+         */
+        public synchronized void closeSinkFactory(LocalExchangeSinkFactoryId sinkFactoryId)
         {
             closedSinkFactories.add(sinkFactoryId);
             for (LocalExchange localExchange : localExchangeMap.values()) {
@@ -490,9 +473,9 @@ public class LocalExchange
         }
     }
 
-    // Sink factory is entirely a pass thought to LocalExchange.
+    // Sink factory is entirely a pass through to LocalExchange.
     // This class only exists as a separate entity to deal with the complex lifecycle caused
-    // by operator factories (e.g., duplicate and noMoreSinkFactories).
+    // by operator factories.
     @ThreadSafe
     public static class LocalExchangeSinkFactory
             implements Closeable
@@ -509,20 +492,10 @@ public class LocalExchange
             return exchange.createSink(this);
         }
 
-        public LocalExchangeSinkFactory duplicate()
-        {
-            return exchange.createSinkFactory();
-        }
-
         @Override
         public void close()
         {
             exchange.sinkFactoryClosed(this);
-        }
-
-        public void noMoreSinkFactories()
-        {
-            exchange.noMoreSinkFactories();
         }
     }
 }
