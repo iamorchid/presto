@@ -163,7 +163,7 @@ public class SimplePagesHashStrategy
             /**
              * 注意和{@link #positionEqualsRow(int, int, int, Page, int[])}的区别，这里不要求rightPage提供额外的
              * rightHashChannels，这意味着rightPage本身就已经是hashChannelsPage，比如对于join的场景，会为probe单独
-             * load join列对应的page。
+             * 加载 join列 对应的page。
              *
              * 参考{@link com.facebook.presto.operator.JoinProbe.JoinProbeFactory#createJoinProbe}。
              */

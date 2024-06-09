@@ -69,8 +69,8 @@ public class TpchBucketFunction
     }
 
     /**
-     * {@link OrderGenerator#makeOrderKey}的逆运算，计算对应order的行号（从0开始）。
-     * 基于order的行号，可以快速计算出order或者lineitem所属的bucket。
+     * {@link OrderGenerator#makeOrderKey}的逆运算，计算对应order的row number（它是从1开始, 计算bucket时,
+     * 需要转成从0开始的序号）。基于order的行号，可以快速计算出order或者lineitem所属的bucket。
      */
     private static long rowNumberFromOrderKey(long orderKey)
     {

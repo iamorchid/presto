@@ -47,6 +47,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.lang.ref.WeakReference;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -315,6 +316,16 @@ public class SqlTaskExecution
                 if (!sourceId.isPresent()) {
                     continue;
                 }
+
+                /**
+                 * 对于包含{@link com.facebook.presto.operator.ExchangeOperator}的pipeline来说, 如果它创建了多个{@link Driver}, 
+                 * 则它的每个driver都会执行updateSource操作。但因为ExchangeOperator的各个instance (每个driver会创建独立的instance) 
+                 * 使用相同的ExchangeClient实例, 会保证不会重复读取同一个{@link com.facebook.presto.split.RemoteSplit}。
+                 * 
+                 * 参考：
+                 * {@link com.facebook.presto.operator.ExchangeOperator.ExchangeOperatorFactory#createOperator}
+                 * {@link com.facebook.presto.operator.ExchangeClient#addLocation}
+                 */
                 TaskSource sourceUpdate = updatedRemoteSources.get(sourceId.get());
                 if (sourceUpdate == null) {
                     continue;

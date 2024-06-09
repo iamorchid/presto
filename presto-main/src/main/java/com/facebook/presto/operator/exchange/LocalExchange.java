@@ -123,6 +123,21 @@ public class LocalExchange
             exchangerSupplier = () -> new RandomExchanger(buffers, memoryManager);
         }
         else if (partitioning.equals(FIXED_PASSTHROUGH_DISTRIBUTION)) {
+            /**
+             * 当LocalExchange需要进行归并排序时, 会用到FIXED_PASSTHROUGH_DISTRIBUTION, 比如task中的pipelines:
+             * 1）TaskOutputOperator -> LocalMergeSourceOperator (drivers: 1)
+             * 2) LocalExchangeSinkOperator -> OrderByOperator -> ExchangeOperator (drivers: 4)
+             *
+             * LocalExchangeSinkOperator所在pipeline的每个stream（即每个driver的输出）满足排序, 这里需要保证每个
+             * stream一一对应到一个LocalExchangeSource (LocalExecutionPlanner会保证使用的LocalExchangeSource
+             * 数量和LocalExchangeSinkOperator所在pipeline的drivers个数一致)。这样LocalMergeSourceOperator可以
+             * 采用单个driver将多个LocalExchangeSource的结果进行归并排序后输出。
+             *
+             * 参考:
+             * {@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#visitSort}
+             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#createLocalExchange}
+             * sql-samples/sqls-sort-merge
+             */
             Iterator<LocalExchangeSource> sourceIterator = this.sources.iterator();
             exchangerSupplier = () -> {
                 checkState(sourceIterator.hasNext(), "no more sources");
@@ -157,14 +172,14 @@ public class LocalExchange
             List<Type> partitioningChannelTypes,
             boolean isHashPrecomputed)
     {
+        /**
+         * 通过{@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#enforce}可以知道,
+         * LOCAL ExchangeNode采用的partitioning方式都是{@link SystemPartitioningHandle}.
+         */
         if (partitioning.getConnectorHandle() instanceof SystemPartitioningHandle) {
-            HashGenerator hashGenerator;
-            if (isHashPrecomputed) {
-                hashGenerator = new PrecomputedHashGenerator(0);
-            }
-            else {
-                hashGenerator = InterpretedHashGenerator.createPositionalWithTypes(partitioningChannelTypes);
-            }
+            HashGenerator hashGenerator = isHashPrecomputed
+                    ? new PrecomputedHashGenerator(0)
+                    : InterpretedHashGenerator.createPositionalWithTypes(partitioningChannelTypes);
             return new LocalPartitionGenerator(hashGenerator, partitionCount);
         }
 

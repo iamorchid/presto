@@ -71,7 +71,9 @@ public class TpchNodePartitioningProvider
     public BucketFunction getBucketFunction(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorPartitioningHandle partitioningHandle, List<Type> partitionChannelTypes, int bucketCount)
     {
         /**
-         * 通过列orderKey来判断某行所属的bucket（表orders以及lineitem都包含orderKey列）。
+         * 通过列orderKey来判断某行所属的bucket（表orders以及lineitem都包含orderKey列）。更准确说,
+         * 是通过orderKey反向计算出row NO#, 然后基于row NO#和rowsPerBucket来判断row所属的bucket.
+         * 注意：row NO#是连续的, 但是orderKey是稀疏的 (大致相差成4倍).
          */
         long totalRows = ((TpchPartitioningHandle) partitioningHandle).getTotalRows();
         long rowsPerBucket = totalRows / bucketCount;

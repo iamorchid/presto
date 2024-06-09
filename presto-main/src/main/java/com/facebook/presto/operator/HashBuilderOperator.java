@@ -39,6 +39,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Queue;
+import java.util.function.Supplier;
 
 import static com.facebook.airlift.concurrent.MoreFutures.getDone;
 import static com.facebook.presto.ExceededMemoryLimitException.exceededLocalUserMemoryLimit;
@@ -124,6 +125,12 @@ public class HashBuilderOperator
             checkState(!closed, "Factory is already closed");
             OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, HashBuilderOperator.class.getSimpleName());
 
+            /**
+             * pipeline的多个{@link Driver}之间, 复用的是同一个{@link PartitionedLookupSourceFactory}。当执行HashBuilderOperator
+             * 的driver完成后, 会调用{@link PartitionedLookupSourceFactory#lendPartitionLookupSource}。当最后一个driver完成时, 还
+             * 会调用{@link PartitionedLookupSourceFactory#supplyLookupSources()}, 来通知LookupJoinOperator之类的pipeline开始进
+             * 行join操作 (此时build table已经完成了构建)。
+             */
             PartitionedLookupSourceFactory lookupSourceFactory = this.lookupSourceFactoryManager.getJoinBridge(driverContext.getLifespan());
             int partitionIndex = getAndIncrementPartitionIndex(driverContext.getLifespan());
             verify(partitionIndex < lookupSourceFactory.partitions());
@@ -264,6 +271,10 @@ public class HashBuilderOperator
         this.localUserMemoryContext = operatorContext.localUserMemoryContext();
         this.localRevocableMemoryContext = operatorContext.localRevocableMemoryContext();
 
+        //       JoinNode
+        //        /    \
+        //     Probe  Build
+        // lookupSourceFactory.getTypes() 表示的是Build所有输出类型, 包括join条件以及JoinNode输出中用到的Build的输出
         this.index = pagesIndexFactory.newPagesIndex(lookupSourceFactory.getTypes(), expectedPositions);
         this.lookupSourceFactory = lookupSourceFactory;
         lookupSourceFactoryDestroyed = lookupSourceFactory.isDestroyed();
