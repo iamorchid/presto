@@ -1,16 +1,44 @@
 1)
-explain
+explain (type distributed)
 select count(distinct(clerk)) from orders;
 
-explain
-select count(distinct(clerk)), count(distinct(orderdate)) from orders;
-
-
-explain
-select count(distinct(orderkey)) from orders;
-
-explain
-select orderdate, count(*) as total, count(distinct(clerk)) as total_dist from orders group by orderdate;
+                                                                                                                 Query Plan                                                                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                        
+     Output layout: [count]                                                                                                                                                                                                                 
+     Output partitioning: SINGLE []                                                                                                                                                                                                         
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                          
+     - Output[PlanNodeId 8][_col0] => [count:bigint]                                                                                                                                                                                        
+             _col0 := count (2:8)                                                                                                                                                                                                           
+         - Aggregate(FINAL)[PlanNodeId 3] => [count:bigint]                                                                                                                                                                                 
+                 count := "presto.default.count"((count_4)) (2:8)                                                                                                                                                                           
+             - LocalExchange[PlanNodeId 280][SINGLE] () => [count_4:bigint]                                                                                                                                                                 
+                 - RemoteSource[1] => [count_4:bigint]                                                                                                                                                                                      
+                                                                                                                                                                                                                                            
+ Fragment 1 [HASH]                                                                                                                                                                                                                          
+     Output layout: [count_4]                                                                                                                                                                                                               
+     Output partitioning: SINGLE []                                                                                                                                                                                                         
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                          
+     - Aggregate(PARTIAL)[PlanNodeId 284] => [count_4:bigint]                                                                                                                                                                               
+             count_4 := "presto.default.count"((clerk)) (2:8)                                                                                                                                                                               
+         - Aggregate(FINAL)[clerk][$hashvalue][PlanNodeId 49] => [clerk:varchar(15), $hashvalue:bigint]                                                                                                                                     
+             - LocalExchange[PlanNodeId 296][HASH][$hashvalue] (clerk) => [clerk:varchar(15), $hashvalue:bigint]                                                                                                                            
+                 - RemoteSource[2] => [clerk:varchar(15), $hashvalue_5:bigint]                                                                                                                                                              
+                                                                                                                                                                                                                                            
+ Fragment 2 [tpch:orders:15000]                                                                                                                                                                                                             
+     Output layout: [clerk, $hashvalue_6]                                                                                                                                                                                                   
+     Output partitioning: HASH [clerk][$hashvalue_6]                                                                                                                                                                                        
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                          
+     - Aggregate(PARTIAL)[clerk][$hashvalue_6][PlanNodeId 300] => [clerk:varchar(15), $hashvalue_6:bigint]                                                                                                                                  
+         - ScanProject[PlanNodeId 0,341][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [clerk:varchar(15), $hashvalue_6:bigint] 
+                 Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 300,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 735,000.00, memory: 0.00, network: 0.00}       
+                 $hashvalue_6 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (2:8)                                                                                                                             
+                 clerk := tpch:clerk (2:36)                                                                                                                                                                                                 
+                 tpch:orderstatus                                                                                                                                                                                                           
+                     :: [["F"], ["O"], ["P"]]                                                                                                                                                                                               
+                                                                                                                                                                                                                                            
+                                                                                                                                                                                                                                            
+(1 row)
 
 
 2)

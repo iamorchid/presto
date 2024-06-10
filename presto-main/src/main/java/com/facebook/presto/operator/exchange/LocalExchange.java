@@ -134,9 +134,15 @@ public class LocalExchange
              * 数量和LocalExchangeSinkOperator所在pipeline的drivers个数一致)。这样LocalMergeSourceOperator可以
              * 采用单个driver将多个LocalExchangeSource的结果进行归并排序后输出。
              *
+             * 说明:
+             * 不会存在如下pipeline, 因为LocalExchangeSinkOperator参与的drivers个数是不确定的, 下面的逻辑会break.
+             * AddLocalExchanges保证在distributed_sort开启的时候, 在SortNode之前插入remote ExchangeNode.
+             * 1）TaskOutputOperator -> LocalMergeSourceOperator (drivers: 1)
+             * 2) LocalExchangeSinkOperator -> OrderByOperator -> TableScanOperator (drivers: per split)
+             *
              * 参考:
              * {@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#visitSort}
-             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#createLocalExchange}
+             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#createLocalMerge}
              * sql-samples/sqls-sort-merge
              */
             Iterator<LocalExchangeSource> sourceIterator = this.sources.iterator();

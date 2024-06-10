@@ -101,7 +101,7 @@ public class ActualProperties
      *    {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#visitRemoteSource}
      *
      *    SQL参考：
-     *    sql-samples/sqls-sort-basic
+     *    sql-samples/sqls-sort-merge
      */
     private final List<LocalProperty<VariableReferenceExpression>> localProperties;
 

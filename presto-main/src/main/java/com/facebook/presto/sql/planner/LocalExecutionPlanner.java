@@ -183,6 +183,7 @@ import com.facebook.presto.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunction
 import com.facebook.presto.sql.gen.OrderingCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.facebook.presto.sql.planner.optimizations.IndexJoinOptimizer;
+import com.facebook.presto.sql.planner.optimizations.StreamPreferredProperties;
 import com.facebook.presto.sql.planner.plan.AbstractJoinNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.DeleteNode;
@@ -2433,6 +2434,10 @@ public class LocalExecutionPlanner
                     .map(buildSource.getTypes()::get)
                     .collect(toImmutableList());
             boolean buildOuter = node.getType() == RIGHT || node.getType() == FULL;
+            /**
+             * 由{@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#visitJoin}可以知道,
+             * build node的输出必须要满足exactlyPartitionedOn(buildHashVariables).
+             */
             int partitionCount = buildContext.getDriverInstanceCount().orElse(1);
             JoinBridgeManager<PartitionedLookupSourceFactory> lookupSourceFactoryManager = new JoinBridgeManager<>(
                     buildOuter,

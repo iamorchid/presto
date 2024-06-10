@@ -273,7 +273,7 @@ public class AddExchanges
             boolean hasMixedGroupingSets = node.hasEmptyGroupingSet() && node.hasNonEmptyGroupingSet();
             PreferredProperties preferredProperties = preferSingleNode ? PreferredProperties.undistributed() : PreferredProperties.any();
 
-            // If aggregation has a mixed of non-global and global grouping set, an repartition exchange is any way needed to eliminate duplicate default outputs
+            // If aggregation has a mix of non-global and global grouping set, a repartition exchange is any way needed to eliminate duplicate default outputs
             // from partial aggregations (enforced in `ValidateAggregationWithDefaultValues.java`). Therefore, we don't have preference on what the child will return.
             if (!node.getGroupingKeys().isEmpty() && !hasMixedGroupingSets) {
                 AggregationPartitioningMergingStrategy aggregationPartitioningMergingStrategy = getAggregationPartitioningMergingStrategy(session);

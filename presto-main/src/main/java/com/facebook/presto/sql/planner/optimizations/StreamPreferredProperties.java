@@ -95,6 +95,10 @@ public class StreamPreferredProperties
         return new StreamPreferredProperties(Optional.of(FIXED), Optional.empty(), false);
     }
 
+    /**
+     * 对于如下SQL, 是否开启prefer_streaming_operators对执行计划影响较大, 可以参考分析: sql-examples/sqls-aggregation-filter
+     * select orderpriority, count(distinct(clerk)), count(distinct(clerk)) filter (where orderkey < 100) from orders group by grouping sets ( (), (orderpriority));
+     */
     public static StreamPreferredProperties defaultParallelism(Session session)
     {
         if (getTaskConcurrency(session) > 1 && !preferStreamingOperators(session)) {
@@ -162,6 +166,10 @@ public class StreamPreferredProperties
         return new StreamPreferredProperties(distribution, Optional.of(desiredPartitioning), false);
     }
 
+    /**
+     * 对于如下SQL, 是否开启prefer_streaming_operators对执行计划影响较大, 可以参考分析: sql-examples/sqls-aggregation-filter
+     * select orderpriority, count(distinct(clerk)), count(distinct(clerk)) filter (where orderkey < 100) from orders group by grouping sets ( (), (orderpriority));
+     */
     public StreamPreferredProperties withDefaultParallelism(Session session)
     {
         if (getTaskConcurrency(session) > 1 && !preferStreamingOperators(session)) {

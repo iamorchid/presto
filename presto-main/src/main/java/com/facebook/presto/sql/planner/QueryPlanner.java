@@ -725,6 +725,11 @@ class QueryPlanner
         // This tracks the grouping sets before complex expressions are considered (see comments below)
         // It's also used to compute the descriptors needed to implement grouping()
         List<Set<FieldId>> columnOnlyGroupingSets = ImmutableList.of(ImmutableSet.of());
+
+        /**
+         * 如果没有定义任务group by, 则等价于使用empty grouping sets, 即select count(*) from table等价于:
+         * select count(*) from table group by grouping sets ( () )
+         */
         List<List<VariableReferenceExpression>> groupingSets = ImmutableList.of(ImmutableList.of());
 
         /**
@@ -745,7 +750,8 @@ class QueryPlanner
             // But, they don't affect the number of grouping sets or the behavior of "distinct" . We can compute all the candidate
             // grouping sets in terms of fieldId, dedup as appropriate and then cross-join them with the complex expressions.
             /**
-             * 当group by中只存在complex expressions, enumerateGroupingSets会返回ImmutableList.of(ImmutableSet.of())
+             * 当group by中只存在complex expressions 或者 只存在empty grouping set时,
+             * enumerateGroupingSets会返回ImmutableList.of(ImmutableSet.of())
              */
             Analysis.GroupingSetAnalysis groupingSetAnalysis = analysis.getGroupingSets(node);
             columnOnlyGroupingSets = enumerateGroupingSets(groupingSetAnalysis);

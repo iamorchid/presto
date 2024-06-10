@@ -147,7 +147,6 @@ public class SingleDistinctAggregationToGroupBy
                                         Map.Entry::getKey,
                                         e -> removeDistinct(e.getValue()))),
                         aggregation.getGroupingSets(),
-                        // 这里移除了原来的{@link AggregationNode#aggregations}
                         emptyList(),
                         aggregation.getStep(),
                         aggregation.getHashVariable(),
