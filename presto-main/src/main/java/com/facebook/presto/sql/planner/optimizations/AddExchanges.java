@@ -1087,7 +1087,13 @@ public class AddExchanges
                     if (filteringSource.getProperties().isNodePartitionedOn(filteringSourceVariables, true, isExactPartitioningPreferred(session)) && !filteringSource.getProperties().isSingleNode()) {
                         Partitioning sourcePartitioning = filteringSource.getProperties().translateVariable(createTranslator(filteringToSource)).getNodePartitioning().get();
                         source = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, source.getNode(), new PartitioningScheme(sourcePartitioning, source.getNode().getOutputVariables())),
+                                partitionedExchange(
+                                        idAllocator.getNextId(),
+                                        REMOTE_STREAMING,
+                                        source.getNode(),
+                                        new PartitioningScheme(
+                                                sourcePartitioning,
+                                                source.getNode().getOutputVariables())),
                                 source.getProperties());
                     }
                     else {
@@ -1100,7 +1106,13 @@ public class AddExchanges
                                         Optional.empty()),
                                 source.getProperties());
                         filteringSource = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, filteringSource.getNode(), createPartitioning(filteringSourceVariables), Optional.empty(), true),
+                                partitionedExchange(
+                                        idAllocator.getNextId(),
+                                        REMOTE_STREAMING,
+                                        filteringSource.getNode(),
+                                        createPartitioning(filteringSourceVariables),
+                                        Optional.empty(),
+                                        true),
                                 filteringSource.getProperties());
                     }
                 }

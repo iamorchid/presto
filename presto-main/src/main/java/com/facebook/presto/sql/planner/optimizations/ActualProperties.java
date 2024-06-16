@@ -425,6 +425,9 @@ public class ActualProperties
         // When doing an IN query NULL in empty set is false, NULL in non-empty set is NULL. Say non-NULL element A (number 1) in
         // a set that is missing A ( say 2, 3) is false, but A in (2, 3, NULL) is NULL.
         // IN is equivalent to "a = b OR a = c OR a = d...).
+        /**
+         * 主要是决定nulls是否需要进行replicated, 见{@link com.facebook.presto.operator.repartition.PartitionedOutputOperator.PagePartitioner#partitionPage}
+         */
         private final boolean nullsAndAnyReplicated;
 
         private Global(Optional<Partitioning> nodePartitioning, Optional<Partitioning> streamPartitioning, boolean nullsAndAnyReplicated)

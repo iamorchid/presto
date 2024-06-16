@@ -1348,6 +1348,14 @@ public class LocalExecutionPlanner
 
             Map<VariableReferenceExpression, Integer> argumentMappings = new HashMap<>();
             for (VariableReferenceExpression output : node.getAggregationArguments()) {
+                /**
+                 * 这里为何可以直接使用aggregation arguments中的VariableReferenceExpression从上游source获取input channel,
+                 * 而node.getGroupingSets()中的groupBy VariableReferenceExpression却需要经过node.getGroupingColumns()
+                 * 进行map才行？这是因为groupBy VariableReferenceExpression的name进行了重命名(增加$gid后缀).
+                 *
+                 * 参考:
+                 * {@link com.facebook.presto.sql.planner.QueryPlanner#aggregate}
+                 */
                 int inputChannel = source.getLayout().get(output);
 
                 newLayout.put(output, outputChannel++);
@@ -1357,6 +1365,10 @@ public class LocalExecutionPlanner
 
             // for every grouping set, create a mapping of all output to input channels (including arguments)
             ImmutableList.Builder<Map<Integer, Integer>> mappings = ImmutableList.builder();
+            /**
+             * 每个groupingSet使用的groupBy columns是node.getGroupingColumns()的一个子集, 他们的合集
+             * 才组成了整个node.getGroupingColumns().
+             */
             for (List<VariableReferenceExpression> groupingSet : node.getGroupingSets()) {
                 ImmutableMap.Builder<Integer, Integer> setMapping = ImmutableMap.builder();
 
