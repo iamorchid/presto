@@ -44,6 +44,9 @@ presto:tiny> select 2 in (1, null);
  NULL  
 (1 row)
 
+SemiJoin相关实现类:
+- TransformUncorrelatedInPredicateSubqueryToSemiJoin
+
 1)
 explain (type distributed)
 select clerk, orderkey from orders where orderkey in (select orderkey from lineitem where orderkey < 10);
@@ -214,13 +217,19 @@ select clerk, orderkey from orders where (orderkey in (select case when orderkey
      - Output[PlanNodeId 15][clerk, orderkey] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                     
              Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 1,083,150.00, network: ?}                                                                                                                                              
          - RemoteSource[1] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                                        
-                                                                                                                                                                                                                                                          
+
+ /* 这里fragment的并行度是怎么确定的？*/   
+ /* 
+  * 主要有Fragment中的ExchangeNode决定, 但Fragment中存在多个ExchangeNode时, 会要求它们PartitioningScheme中
+  * 使用的Partitioning必须兼容（BasePlanFragmenter#createRemoteStreamingExchange）。
+  */                                                                                                                                                                                                                                        
  Fragment 1 [HASH]                                                                                                                                                                                                                                        
      Output layout: [clerk, orderkey]                                                                                                                                                                                                                     
      Output partitioning: SINGLE []                                                                                                                                                                                                                       
      Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                        
      - FilterProject[PlanNodeId 10,11][filterPredicate = IS_NULL(expr_8), projectLocality = LOCAL] => [clerk:varchar(15), orderkey:bigint]                                                                                                                
              Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: 8,007,600.00, memory: 1,083,150.00, network: 1,653,150.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 1,083,150.00, network: 1,653,150.00}                        
+         /* 去掉 $hashvalue */
          - Project[PlanNodeId 570][projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), expr_8:boolean]                                                                                                                                       
                  Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 7,542,600.00, memory: 1,083,150.00, network: 1,653,150.00}                                                                                                        
              - SemiJoin[PlanNodeId 203][orderkey = expr][$hashvalue, $hashvalue_18] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bigint, expr_8:boolean]                                                                                            
@@ -257,3 +266,13 @@ select clerk, orderkey from orders where (orderkey in (select case when orderkey
                                                                                                                                                                                                                                                           
                                                                                                                                                                                                                                                           
 (1 row)
+
+
+5)'
+set session tpch.disable_orders_partitioning=true;
+set session join_distribution_type='PARTITIONED';
+
+explain (type distributed)
+select clerk, orderkey from orders 
+    where (orderkey in (select case when orderkey < 3 then orderkey else null end from lineitem)) or 
+        (orderkey in (select case when orderkey % 1000 = 0 then orderkey else null end from lineitem));
