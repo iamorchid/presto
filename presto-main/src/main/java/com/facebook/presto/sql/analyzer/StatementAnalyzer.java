@@ -1686,7 +1686,7 @@ class StatementAnalyzer
             // TODO: extract candidate names from SELECT, WHERE, HAVING, GROUP BY and ORDER BY expressions
             // to pass down to analyzeFrom
 
-            analysis.setCurrentSubquery(node);
+            analysis.setCurrentQuerySpecification(node);
             Scope sourceScope = analyzeFrom(node, scope);
 
             if (node.getWhere().isPresent()) {

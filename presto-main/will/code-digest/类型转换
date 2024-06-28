@@ -1,0 +1,56 @@
+public final class VarcharType
+        extends AbstractVarcharType
+{
+    public static final VarcharType VARCHAR = new VarcharType(UNBOUNDED_LENGTH);
+
+    private VarcharType(int length)
+    {
+        super(
+                length,
+                new TypeSignature(
+                        StandardTypes.VARCHAR,
+                        singletonList(TypeSignatureParameter.of((long) length))));
+    }
+}
+
+
+class FunctionAndTypeManager 
+{
+  @Override
+  public Type getType(TypeSignature signature)
+  {
+      if (signature.getTypeSignatureBase().hasStandardType()) {
+          // Some info about Type has been materialized in the signature itself, so directly use it instead of fetching it
+          if (signature.isDistinctType()) {
+              return getDistinctType(signature.getParameters().get(0).getDistinctTypeInfo());
+          }
+          Optional<Type> type = builtInTypeAndFunctionNamespaceManager.getType(signature.getStandardTypeSignature());
+          if (type.isPresent()) {
+              if (signature.getTypeSignatureBase().hasTypeName()) {
+                  return new TypeWithName(signature.getTypeSignatureBase().getTypeName(), type.get());
+              }
+              return type.get();
+          }
+      }
+
+      return getUserDefinedType(signature);
+  }
+}
+
+
+with addresses(ip) as (VALUES (cast('192.168.0.0' as ipaddress)), (cast('192.168.0.1' as ipaddress))) 
+SELECT ip FROM addresses where ip like '%192.16%';
+
+这里的ipaddress是怎么支持like操作的?
+
+
+class TypeCoercer 
+{
+  public Optional<Type> coerceTypeBase(Type sourceType, String resultTypeBase)
+  {
+      if (sourceType.equals(IpAddressType.IPADDRESS) && resultTypeBase.equals(StandardTypes.VARCHAR)) {
+          return Optional.of(createVarcharType(15));
+      }
+      // ...
+  }
+}

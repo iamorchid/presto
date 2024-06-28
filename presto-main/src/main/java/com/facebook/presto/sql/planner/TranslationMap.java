@@ -226,7 +226,7 @@ class TranslationMap
 
             private Expression rewriteExpressionWithResolvedName(Expression node)
             {
-                return getVariable(rewriteBase, node)
+                return getLocalVariable(rewriteBase, node)
                         .map(variable -> coerceIfNecessary(node, createSymbolReference(variable)))
                         .orElse(coerceIfNecessary(node, node));
             }
@@ -236,17 +236,18 @@ class TranslationMap
             {
                 if (analysis.isColumnReference(node)) {
                     Optional<ResolvedField> resolvedField = rewriteBase.getScope().tryResolveField(node);
-                    if (resolvedField.isPresent()) {
-                        if (resolvedField.get().isLocal()) {
-                            return getVariable(rewriteBase, node)
-                                    .map(variable -> coerceIfNecessary(node, createSymbolReference(variable)))
-                                    .orElseThrow(() -> new IllegalStateException("No symbol mapping for node " + node));
-                        }
+                    if (resolvedField.filter(ResolvedField::isLocal).isPresent()) {
+                        return getLocalVariable(rewriteBase, node)
+                                .map(variable -> coerceIfNecessary(node, createSymbolReference(variable)))
+                                .orElseThrow(() -> new IllegalStateException("No symbol mapping for node " + node));
                     }
                     // do not rewrite outer references, it will be handled in outer scope planner
                     return node;
                 }
 
+                /**
+                 * 参考: {@link com.facebook.presto.sql.analyzer.ExpressionAnalyzer.Visitor#visitDereferenceExpression}
+                 */
                 Type nodeType = analysis.getType(node);
                 Type baseType = analysis.getType(node.getBase());
                 if (isEnumType(baseType) && isEnumType(nodeType)) {
@@ -292,7 +293,7 @@ class TranslationMap
         }, expression, null);
     }
 
-    private Optional<VariableReferenceExpression> getVariable(RelationPlan plan, Expression expression)
+    private Optional<VariableReferenceExpression> getLocalVariable(RelationPlan plan, Expression expression)
     {
         if (!analysis.isColumnReference(expression)) {
             // Expression can be a reference to lambda argument (or DereferenceExpression based on lambda argument reference).
