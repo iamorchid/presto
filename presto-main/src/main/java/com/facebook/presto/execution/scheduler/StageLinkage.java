@@ -49,6 +49,14 @@ public class StageLinkage
                         return new ScaledOutputBufferManager(childStage::setOutputBuffers);
                     }
                     else {
+                        /**
+                         * partitionCount含义：当前stage希望child stage将output划分到多少个partition中。而当前stage
+                         * 会为每个partition创建一个子任务来消费对应partition下的output结果。
+                         *
+                         * 具体逻辑参考：{@link SectionExecutionFactory#createStreamingLinkedStageExecutions}，其中
+                         * 下游stage会将bucketToPartition信息设置到上游stage（即这里的child stage，也即为下游提供output
+                         * 的stage）的{@link PartitioningScheme}中。
+                         */
                         int partitionCount = Ints.max(childStage.getFragment().getPartitioningScheme().getBucketToPartition().get()) + 1;
                         return new PartitionedOutputBufferManager(partitioningHandle, partitionCount, childStage::setOutputBuffers);
                     }
@@ -76,7 +84,7 @@ public class StageLinkage
             case FAILED:
                 // DO NOT complete a FAILED or ABORTED stage.  This will cause the
                 // stage above to finish normally, which will result in a query
-                // completing successfully when it should fail..
+                // completing successfully when it should fail.
                 break;
         }
 

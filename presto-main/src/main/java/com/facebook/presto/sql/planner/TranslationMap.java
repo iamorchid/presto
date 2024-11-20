@@ -125,6 +125,10 @@ class TranslationMap
             @Override
             public Expression rewriteExpression(Expression node, Boolean context, ExpressionTreeRewriter<Boolean> treeRewriter)
             {
+                /**
+                 * 这里的操作会复用上一级PlanNode已有表达式的计算结果。比如AggregationNode计算了max(orderkey)（输出变量为max)，
+                 * 下一级ProjectNode进行了 max(orderkey)+10 时，则可以重写为 max+10 。
+                 */
                 // Do not rewrite if node is constant and within a lambda expression
                 if (expressionToVariables.containsKey(node) && !((context.equals(Boolean.TRUE) && isConstant(node)))) {
                     return new SymbolReference(expression.getLocation(), expressionToVariables.get(node).getName());
@@ -152,6 +156,9 @@ class TranslationMap
             return;
         }
 
+        /**
+         * 将SQL中原始的引用 统一到 底层{@link RelationPlan}的输出符号，方便进行expression比较（即{@link Map#containsKey操作}）。
+         */
         Expression translated = translateNamesToSymbols(expression);
         expressionToVariables.put(translated, variable);
 
@@ -221,16 +228,19 @@ class TranslationMap
                     VariableReferenceExpression variable = lambdaDeclarationToVariableMap.get(NodeRef.of(referencedLambdaArgumentDeclaration));
                     return coerceIfNecessary(node, createSymbolReference(variable));
                 }
-                else {
-                    return rewriteExpressionWithResolvedName(node);
-                }
-            }
 
-            private Expression rewriteExpressionWithResolvedName(Expression node)
-            {
-                return getVariable(rewriteBase, node)
+                return getLocalVariable(rewriteBase, node)
                         .map(variable -> coerceIfNecessary(node, createSymbolReference(variable)))
-                        .orElse(coerceIfNecessary(node, node));
+                        .orElseGet(() -> {
+                            /**
+                             * 当前identifier对应的可能是outer table的字段引用, 比如对于下的SQL, where子句中的clerk会走到这里。
+                             * 另外, where子句中的orders.orderkey对应的是DereferenceExpression.
+                             *
+                             * select clerk, orderstatus, orderkey from orders
+                             * where (select sum(quantity) from lineitem where orders.orderkey = orderkey and clerk like 'Clerk#0000004%') <= 1;
+                             */
+                            return coerceIfNecessary(node, node);
+                        });
             }
 
             @Override
@@ -238,17 +248,18 @@ class TranslationMap
             {
                 if (analysis.isColumnReference(node)) {
                     Optional<ResolvedField> resolvedField = rewriteBase.getScope().tryResolveField(node);
-                    if (resolvedField.isPresent()) {
-                        if (resolvedField.get().isLocal()) {
-                            return getVariable(rewriteBase, node)
-                                    .map(variable -> coerceIfNecessary(node, createSymbolReference(variable)))
-                                    .orElseThrow(() -> new IllegalStateException("No symbol mapping for node " + node));
-                        }
+                    if (resolvedField.filter(ResolvedField::isLocal).isPresent()) {
+                        return getLocalVariable(rewriteBase, node)
+                                .map(variable -> coerceIfNecessary(node, createSymbolReference(variable)))
+                                .orElseThrow(() -> new IllegalStateException("No symbol mapping for node " + node));
                     }
                     // do not rewrite outer references, it will be handled in outer scope planner
                     return node;
                 }
 
+                /**
+                 * 参考: {@link com.facebook.presto.sql.analyzer.ExpressionAnalyzer.Visitor#visitDereferenceExpression}
+                 */
                 Type nodeType = analysis.getType(node);
                 Type baseType = analysis.getType(node.getBase());
                 if (isEnumType(baseType) && isEnumType(nodeType)) {
@@ -271,6 +282,11 @@ class TranslationMap
                 return new LambdaExpression(node.getLocation(), newArguments.build(), rewrittenBody);
             }
 
+            /**
+             * 支持以下语句:
+             * prepare myquery from select * from orders where orderkey < ? and orderstatus = ?;
+             * execute myquery using 10, 'F';
+             */
             @Override
             public Expression rewriteParameter(Parameter node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
             {
@@ -291,10 +307,10 @@ class TranslationMap
                 }
                 return rewritten;
             }
-        }, expression, null);
+        }, expression);
     }
 
-    private Optional<VariableReferenceExpression> getVariable(RelationPlan plan, Expression expression)
+    private Optional<VariableReferenceExpression> getLocalVariable(RelationPlan plan, Expression expression)
     {
         if (!analysis.isColumnReference(expression)) {
             // Expression can be a reference to lambda argument (or DereferenceExpression based on lambda argument reference).

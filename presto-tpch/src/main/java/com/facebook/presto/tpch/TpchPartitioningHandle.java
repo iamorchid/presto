@@ -25,22 +25,27 @@ import static java.util.Objects.requireNonNull;
 public class TpchPartitioningHandle
         implements ConnectorPartitioningHandle
 {
-    private final String table;
+    private final String partitioningTable;
     private final long totalRows;
+    private final boolean groupedExecutionDisabled;
 
     @JsonCreator
-    public TpchPartitioningHandle(@JsonProperty("table") String table, @JsonProperty("totalRows") long totalRows)
+    public TpchPartitioningHandle(@JsonProperty("partitioningTable") String partitioningTable,
+                                  @JsonProperty("totalRows") long totalRows,
+                                  @JsonProperty("groupedExecutionDisabled") boolean groupedExecutionDisabled)
     {
-        this.table = requireNonNull(table, "table is null");
+        this.partitioningTable = requireNonNull(partitioningTable, "table is null");
 
         checkArgument(totalRows > 0, "totalRows must be at least 1");
         this.totalRows = totalRows;
+
+        this.groupedExecutionDisabled = groupedExecutionDisabled;
     }
 
     @JsonProperty
-    public String getTable()
+    public String getPartitioningTable()
     {
-        return table;
+        return partitioningTable;
     }
 
     @JsonProperty
@@ -49,6 +54,18 @@ public class TpchPartitioningHandle
         return totalRows;
     }
 
+    @JsonProperty
+    public boolean isGroupedExecutionDisabled()
+    {
+        return groupedExecutionDisabled;
+    }
+
+    /**
+     * 在判断两张表进行join时能否采用colocated-join，会check两种表的{@link ConnectorPartitioningHandle}是否一致，用到
+     * 的方法就是{@link #equals(Object)}，因此这里判断equals不包含{@link #groupedExecutionDisabled}。
+     *
+     * 具体参见{@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#planPartitionedJoin}。
+     */
     @Override
     public boolean equals(Object o)
     {
@@ -59,19 +76,19 @@ public class TpchPartitioningHandle
             return false;
         }
         TpchPartitioningHandle that = (TpchPartitioningHandle) o;
-        return Objects.equals(table, that.table) &&
+        return Objects.equals(partitioningTable, that.partitioningTable) &&
                 totalRows == that.totalRows;
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(table, totalRows);
+        return Objects.hash(partitioningTable, totalRows);
     }
 
     @Override
     public String toString()
     {
-        return table + ":" + totalRows;
+        return partitioningTable + ":" + totalRows;
     }
 }

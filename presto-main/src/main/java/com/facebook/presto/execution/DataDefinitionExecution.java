@@ -256,7 +256,7 @@ public abstract class DataDefinitionExecution<T extends Statement>
     @Override
     public void addFinalQueryInfoListener(StateChangeListener<QueryInfo> stateChangeListener)
     {
-        stateMachine.addQueryInfoStateChangeListener(stateChangeListener);
+        stateMachine.addFinalQueryInfoStateChangeListener(stateChangeListener);
     }
 
     @Override

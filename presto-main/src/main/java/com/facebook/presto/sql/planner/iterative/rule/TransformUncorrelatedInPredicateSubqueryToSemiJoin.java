@@ -31,7 +31,7 @@ import static com.facebook.presto.sql.planner.plan.Patterns.applyNode;
 import static com.google.common.collect.Iterables.getOnlyElement;
 
 /**
- * This optimizers looks for InPredicate expressions in ApplyNodes and replaces the nodes with SemiJoin nodes.
+ * This optimizer looks for InPredicate expressions in ApplyNodes and replaces the nodes with SemiJoin nodes.
  * <p/>
  * Plan before optimizer:
  * <pre>
@@ -47,8 +47,8 @@ import static com.google.common.collect.Iterables.getOnlyElement;
  * Filter(semijoinresult):
  *   SemiJoin
  *     - source: plan A
- *     - filteringSource: symbol a
- *     - sourceJoinSymbol: plan B
+ *     - filteringSource: plan B
+ *     - sourceJoinSymbol: symbol a
  *     - filteringSourceJoinSymbol: symbol b
  *     - semiJoinOutput: semijoinresult
  * </pre>

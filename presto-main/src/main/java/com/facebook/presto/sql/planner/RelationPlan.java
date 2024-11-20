@@ -31,7 +31,7 @@ import static java.util.Objects.requireNonNull;
  * indicate how the fields (by position) in the relation map to
  * the outputs of the plan.
  * <p>
- * Fields are resolved by {@link TranslationMap} within local scopes hierarchy.
+ * Fields are resolved by {@link TranslationMap} within local scope's hierarchy.
  * Indexes of resolved parent scope fields start from "total number of child scope fields".
  * For instance if a child scope has n fields, then first parent scope field
  * will have index n.

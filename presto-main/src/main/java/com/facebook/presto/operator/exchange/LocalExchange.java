@@ -14,6 +14,7 @@
 package com.facebook.presto.operator.exchange;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.Page;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.operator.BucketPartitionFunction;
@@ -71,9 +72,6 @@ public class LocalExchange
     private boolean allSourcesFinished;
 
     @GuardedBy("this")
-    private boolean noMoreSinkFactories;
-
-    @GuardedBy("this")
     private final List<LocalExchangeSinkFactory> allSinkFactories;
 
     @GuardedBy("this")
@@ -96,11 +94,14 @@ public class LocalExchange
             Optional<Integer> partitionHashChannel,
             DataSize maxBufferedBytes)
     {
+        /**
+         * local {@link com.facebook.presto.sql.planner.plan.ExchangeNode#sources}的大小可以超过1,
+         * 此时每个source会有自己独立的LocalExchangeSinkFactory.
+         */
         this.allSinkFactories = Stream.generate(() -> new LocalExchangeSinkFactory(LocalExchange.this))
                 .limit(sinkFactoryCount)
                 .collect(toImmutableList());
         openSinkFactories.addAll(allSinkFactories);
-        noMoreSinkFactories();
 
         ImmutableList.Builder<LocalExchangeSource> sources = ImmutableList.builder();
         for (int i = 0; i < bufferCount; i++) {
@@ -123,6 +124,27 @@ public class LocalExchange
             exchangerSupplier = () -> new RandomExchanger(buffers, memoryManager);
         }
         else if (partitioning.equals(FIXED_PASSTHROUGH_DISTRIBUTION)) {
+            /**
+             * 当LocalExchange需要进行归并排序时, 会用到FIXED_PASSTHROUGH_DISTRIBUTION, 比如task中的pipelines:
+             * 1）TaskOutputOperator -> LocalMergeSourceOperator (drivers: 1)
+             * 2) LocalExchangeSinkOperator -> OrderByOperator -> ExchangeOperator (drivers: 4)
+             *
+             * LocalExchangeSinkOperator所在pipeline的每个stream（即每个driver的输出）满足排序, 这里需要保证每个
+             * stream一一对应到一个LocalExchangeSource (LocalExecutionPlanner会保证使用的LocalExchangeSource
+             * 数量和LocalExchangeSinkOperator所在pipeline的drivers个数一致)。这样LocalMergeSourceOperator可以
+             * 采用单个driver将多个LocalExchangeSource的结果进行归并排序后输出。
+             *
+             * 说明:
+             * 不会存在如下pipeline, 因为LocalExchangeSinkOperator参与的drivers个数是不确定的, 下面的逻辑会break.
+             * AddLocalExchanges保证在distributed_sort开启的时候, 在SortNode之前插入remote ExchangeNode.
+             * 1）TaskOutputOperator -> LocalMergeSourceOperator (drivers: 1)
+             * 2) LocalExchangeSinkOperator -> OrderByOperator -> TableScanOperator (drivers: per split)
+             *
+             * 参考:
+             * {@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#visitSort}
+             * {@link com.facebook.presto.sql.planner.LocalExecutionPlanner.Visitor#createLocalMerge}
+             * sql-samples/sqls-sort-merge
+             */
             Iterator<LocalExchangeSource> sourceIterator = this.sources.iterator();
             exchangerSupplier = () -> {
                 checkState(sourceIterator.hasNext(), "no more sources");
@@ -130,7 +152,10 @@ public class LocalExchange
             };
         }
         else if (partitioning.equals(FIXED_HASH_DISTRIBUTION) || partitioning.getConnectorId().isPresent()) {
-            // partitioned exchange
+            /**
+             * 看起来所有的sinks理论上可以复用同一个PartitioningExchanger, 因为{@link PartitioningExchanger#accept(Page)}
+             * 是线程安全的. 但这样的话, PartitioningExchanger#accept会存在多线程竞争同步锁.
+             */
             exchangerSupplier = () -> new PartitioningExchanger(
                     buffers,
                     memoryManager,
@@ -157,14 +182,14 @@ public class LocalExchange
             List<Type> partitioningChannelTypes,
             boolean isHashPrecomputed)
     {
+        /**
+         * 通过{@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#enforce}可以知道,
+         * LOCAL ExchangeNode采用的partitioning方式都是{@link SystemPartitioningHandle}.
+         */
         if (partitioning.getConnectorHandle() instanceof SystemPartitioningHandle) {
-            HashGenerator hashGenerator;
-            if (isHashPrecomputed) {
-                hashGenerator = new PrecomputedHashGenerator(0);
-            }
-            else {
-                hashGenerator = InterpretedHashGenerator.createPositionalWithTypes(partitioningChannelTypes);
-            }
+            HashGenerator hashGenerator = isHashPrecomputed
+                    ? new PrecomputedHashGenerator(0)
+                    : InterpretedHashGenerator.createPositionalWithTypes(partitioningChannelTypes);
             return new LocalPartitionGenerator(hashGenerator, partitionCount);
         }
 
@@ -197,14 +222,6 @@ public class LocalExchange
     public long getBufferedBytes()
     {
         return memoryManager.getBufferedBytes();
-    }
-
-    public synchronized LocalExchangeSinkFactory createSinkFactory()
-    {
-        checkState(!noMoreSinkFactories, "No more sink factories already set");
-        LocalExchangeSinkFactory newFactory = new LocalExchangeSinkFactory(this);
-        openSinkFactories.add(newFactory);
-        return newFactory;
     }
 
     public synchronized LocalExchangeSinkFactory getSinkFactory(LocalExchangeSinkFactoryId id)
@@ -268,6 +285,11 @@ public class LocalExchange
         }
     }
 
+    /**
+     * 当{@link LocalExchangeSinkOperator#close()}调用时（即对应的driver退出时），将会调用这个方法。
+     *
+     * {@link LocalExchangeSink}和{@link LocalExchangeSinkOperator}一一对应。
+     */
     private void sinkFinished(LocalExchangeSink sink)
     {
         checkNotHoldsLock(this);
@@ -278,16 +300,10 @@ public class LocalExchange
         checkAllSinksComplete();
     }
 
-    private void noMoreSinkFactories()
-    {
-        checkNotHoldsLock(this);
-
-        synchronized (this) {
-            noMoreSinkFactories = true;
-        }
-        checkAllSinksComplete();
-    }
-
+    /**
+     * 当{@link LocalExchangeSinkOperator.LocalExchangeSinkOperatorFactory#noMoreOperators()}将会调用这个方法，这个发生在对应
+     * 的pipeline不再需要创建新的Drivers（即{@link com.facebook.presto.operator.DriverFactory#noMoreDrivers()}）。
+     */
     private void sinkFactoryClosed(LocalExchangeSinkFactory sinkFactory)
     {
         checkNotHoldsLock(this);
@@ -303,7 +319,7 @@ public class LocalExchange
         checkNotHoldsLock(this);
 
         synchronized (this) {
-            if (!noMoreSinkFactories || !openSinkFactories.isEmpty() || !sinks.isEmpty()) {
+            if (!openSinkFactories.isEmpty() || !sinks.isEmpty()) {
                 return;
             }
         }
@@ -411,7 +427,11 @@ public class LocalExchange
             });
         }
 
-        public synchronized void closeSinks(LocalExchangeSinkFactoryId sinkFactoryId)
+        /**
+         * 对应的sinkFactory不会再产生新的sinks, 即对应的LocalExchangeSinkOperatorFactory已经完成
+         * 所在pipeline的所有Driver实例的LocalExchangeSinkOperator的生成.
+         */
+        public synchronized void closeSinkFactory(LocalExchangeSinkFactoryId sinkFactoryId)
         {
             closedSinkFactories.add(sinkFactoryId);
             for (LocalExchange localExchange : localExchangeMap.values()) {
@@ -459,9 +479,9 @@ public class LocalExchange
         }
     }
 
-    // Sink factory is entirely a pass thought to LocalExchange.
+    // Sink factory is entirely a pass through to LocalExchange.
     // This class only exists as a separate entity to deal with the complex lifecycle caused
-    // by operator factories (e.g., duplicate and noMoreSinkFactories).
+    // by operator factories.
     @ThreadSafe
     public static class LocalExchangeSinkFactory
             implements Closeable
@@ -478,20 +498,10 @@ public class LocalExchange
             return exchange.createSink(this);
         }
 
-        public LocalExchangeSinkFactory duplicate()
-        {
-            return exchange.createSinkFactory();
-        }
-
         @Override
         public void close()
         {
             exchange.sinkFactoryClosed(this);
-        }
-
-        public void noMoreSinkFactories()
-        {
-            exchange.noMoreSinkFactories();
         }
     }
 }

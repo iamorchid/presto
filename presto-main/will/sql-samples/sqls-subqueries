@@ -1,0 +1,64 @@
+1)
+set session tpch.disable_orders_partitioning=true;
+set session tpch.disable_lineitem_partitioning=true;
+set session join_distribution_type='PARTITIONED';
+
+
+2)InPredicate
+explain (type distributed)
+select clerk, orderstatus, orderstatus in (select linestatus from lineitem where orderkey < 3), orderkey 
+from orders;
+
+2) Scalar Subquery
+
+/* 转化为LeftJoin */
+explain (type distributed)
+select clerk, orderstatus, orderkey, (select sum(extendedprice) from lineitem where orders.orderkey = orderkey and orderkey < 3) as price
+from orders
+where orderkey < 5;
+
+/* 理解lineitem.orderkey对应的DereferenceExpression 和 上面的orders.orderkey有何不同 */
+explain (type distributed)
+select clerk, orderstatus, orderkey, (select sum(extendedprice) from lineitem where lineitem.orderkey = orderkey and orderkey < 3) as price
+from orders
+where orderkey < 5;
+
+/* 转化为InnerJoin, 具体如何实现的呢？ */
+explain (type distributed)
+select clerk, orderstatus, orderkey
+from orders
+where (select sum(quantity) from lineitem where orders.orderkey = orderkey) <= 1;
+
+3) Quantified Comparison, 这里的all (any/some)优化值得分析
+explain (type distributed)
+select clerk, orderstatus, orderstatus > all(select linestatus from lineitem where orderkey < 3), orderkey 
+from orders;
+
+explain (type distributed)
+select clerk, orderstatus, orderstatus > some(select linestatus from lineitem where orderkey < 3), orderkey 
+from orders;
+
+4) 谓词中的subquery
+explain (type distributed)
+select clerk, orderstatus, orderkey 
+from orders 
+where (orderkey in (select case when orderkey < 5 then null else orderkey end from lineitem)) is null;
+
+4)
+explain (type distributed)
+select clerk, orderstatus, orderstatus in (select linestatus from lineitem where orderkey < 3), orderkey 
+from orders 
+where (orderkey in (select case when orderkey < 5 then null else orderkey end from lineitem)) is null;
+
+5)
+explain (type distributed)
+select clerk, orderstatus, orderstatus > all(select linestatus from lineitem where orderkey < 3), orderkey 
+from orders 
+where (orderkey in (select case when orderkey < 5 then null else orderkey end from lineitem)) is null;
+
+
+6)
+explain (type distributed)
+select clerk, orderstatus, orderstatus in (select linestatus from lineitem where orderkey < 3), orderkey 
+from (select clerk, orderstatus, orderkey from orders where orderkey >= 3) t 
+where (orderkey in (select case when orderkey < 5 then null else orderkey end from lineitem)) is null;

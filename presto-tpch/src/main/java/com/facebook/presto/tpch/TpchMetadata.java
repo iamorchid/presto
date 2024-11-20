@@ -34,6 +34,7 @@ import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SortingProperty;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
+import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.statistics.ColumnStatistics;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.DoubleRange;
@@ -195,21 +196,29 @@ public class TpchMetadata
         TpchTableHandle tableHandle = (TpchTableHandle) table;
 
         Optional<ConnectorTablePartitioning> tablePartitioning = Optional.empty();
-        Optional<Set<ColumnHandle>> partitioningColumns = Optional.empty();
+        Optional<Set<ColumnHandle>> streamPartitioningColumns = Optional.empty();
         List<LocalProperty<ColumnHandle>> localProperties = ImmutableList.of();
 
         TupleDomain<ColumnHandle> predicate = TupleDomain.all();
         TupleDomain<ColumnHandle> unenforcedConstraint = constraint.getSummary();
         Map<String, ColumnHandle> columns = getColumnHandles(session, tableHandle);
+
+        /**
+         * OrderColumn.ORDER_KEY和LineItemColumn.ORDER_KEY都是基于{@link TpchSplit#partNumber}生成的，
+         * 参见{@link OrderGenerator#makeOrderKey}。
+         */
         if (tableHandle.getTableName().equals(TpchTable.ORDERS.getTableName())) {
-            if (partitioningEnabled) {
+            if (partitioningEnabled && !session.getProperty(TpchSessionProperties.DISABLE_ORDERS_PARTITIONING, Boolean.class)) {
                 ColumnHandle orderKeyColumn = columns.get(columnNaming.getName(OrderColumn.ORDER_KEY));
                 tablePartitioning = Optional.of(new ConnectorTablePartitioning(
                         new TpchPartitioningHandle(
                                 TpchTable.ORDERS.getTableName(),
-                                calculateTotalRows(OrderGenerator.SCALE_BASE, tableHandle.getScaleFactor())),
+                                calculateTotalRows(OrderGenerator.SCALE_BASE, tableHandle.getScaleFactor()),
+                                session.getProperty(TpchSessionProperties.DISABLE_ORDERS_GROUPED_EXECUTION, Boolean.class)),
                         ImmutableList.of(orderKeyColumn)));
-                partitioningColumns = Optional.of(ImmutableSet.of(orderKeyColumn));
+                if (!session.getProperty(TpchSessionProperties.DISABLE_STREAM_PARTITIONING, Boolean.class)) {
+                    streamPartitioningColumns = Optional.of(ImmutableSet.of(orderKeyColumn));
+                }
                 localProperties = ImmutableList.of(new SortingProperty<>(orderKeyColumn, SortOrder.ASC_NULLS_FIRST));
             }
             if (predicatePushdownEnabled) {
@@ -229,14 +238,26 @@ public class TpchMetadata
             unenforcedConstraint = filterOutColumnFromPredicate(unenforcedConstraint, toColumnHandle(PartColumn.TYPE));
         }
         else if (tableHandle.getTableName().equals(TpchTable.LINE_ITEM.getTableName())) {
-            if (partitioningEnabled) {
+            if (partitioningEnabled && !session.getProperty(TpchSessionProperties.DISABLE_LINEITEM_PARTITIONING, Boolean.class)) {
                 ColumnHandle orderKeyColumn = columns.get(columnNaming.getName(LineItemColumn.ORDER_KEY));
                 tablePartitioning = Optional.of(new ConnectorTablePartitioning(
                         new TpchPartitioningHandle(
+                                /**
+                                 * 在判断两张表进行join时能否采用colocated-join，会check两种表的{@link ConnectorPartitioningHandle}是否一致。
+                                 * 这里{@link TpchTable#LINE_ITEM}使用的partitioning方式和{@link TpchTable#ORDERS}一样。
+                                 *
+                                 * 具体参见{@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#planPartitionedJoin}。
+                                 */
                                 TpchTable.ORDERS.getTableName(),
-                                calculateTotalRows(OrderGenerator.SCALE_BASE, tableHandle.getScaleFactor())),
+                                /**
+                                 * 这里计算的total rows是{@link TpchTable#ORDERS}的，一个order会对应多个lineitem条目。
+                                 */
+                                calculateTotalRows(OrderGenerator.SCALE_BASE, tableHandle.getScaleFactor()),
+                                false),
                         ImmutableList.of(orderKeyColumn)));
-                partitioningColumns = Optional.of(ImmutableSet.of(orderKeyColumn));
+                if (!session.getProperty(TpchSessionProperties.DISABLE_STREAM_PARTITIONING, Boolean.class)) {
+                    streamPartitioningColumns = Optional.of(ImmutableSet.of(orderKeyColumn));
+                }
                 localProperties = ImmutableList.of(
                         new SortingProperty<>(orderKeyColumn, SortOrder.ASC_NULLS_FIRST),
                         new SortingProperty<>(columns.get(columnNaming.getName(LineItemColumn.LINE_NUMBER)), SortOrder.ASC_NULLS_FIRST));
@@ -248,7 +269,7 @@ public class TpchMetadata
                 Optional.empty(),
                 predicate, // TODO: conditionally return well-known properties (e.g., orderkey > 0, etc)
                 tablePartitioning,
-                partitioningColumns,
+                streamPartitioningColumns,
                 Optional.empty(),
                 localProperties);
 

@@ -213,6 +213,10 @@ public class PushPartialAggregationThroughExchange
             SymbolMapper symbolMapper = mappingsBuilder.build();
             AggregationNode mappedPartial = symbolMapper.map(aggregation, source, context.getIdAllocator());
 
+            // [question] 这里的project是不是多余的？即是否可以直接使用 partials.add(mappedPartial).
+            // 测试：explain select orderstatus, count(comment) from ((select orderstatus, comment from orders) union all (select orderstatus, comment from orders)) group by orderstatus;
+            // 参考：https://github.com/prestodb/presto/pull/7095
+
             Assignments.Builder assignments = Assignments.builder();
 
             for (VariableReferenceExpression output : aggregation.getOutputVariables()) {
@@ -220,11 +224,15 @@ public class PushPartialAggregationThroughExchange
                 assignments.put(output, input);
             }
             partials.add(new ProjectNode(exchange.getSourceLocation(), context.getIdAllocator().getNextId(), mappedPartial, assignments.build(), LOCAL));
+
+            // TODO partials.add(mappedPartial);
         }
 
         for (PlanNode node : partials) {
             verify(aggregation.getOutputVariables().equals(node.getOutputVariables()));
         }
+        // TODO 上面校验删除
+
         // Since this exchange source is now guaranteed to have the same symbols as the inputs to the partial
         // aggregation, we don't need to rewrite symbols in the partitioning function
         List<VariableReferenceExpression> aggregationOutputs = aggregation.getOutputVariables();
@@ -244,6 +252,7 @@ public class PushPartialAggregationThroughExchange
                 partitioning,
                 partials,
                 ImmutableList.copyOf(Collections.nCopies(partials.size(), aggregationOutputs)),
+                // TODO partials.stream().map(PlanNode::getOutputVariables).collect(Collectors.toList()),
                 exchange.isEnsureSourceOrdering(),
                 Optional.empty());
     }

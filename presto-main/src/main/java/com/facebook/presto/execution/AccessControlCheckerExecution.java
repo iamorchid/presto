@@ -292,7 +292,7 @@ public class AccessControlCheckerExecution
     @Override
     public void addFinalQueryInfoListener(StateMachine.StateChangeListener<QueryInfo> stateChangeListener)
     {
-        stateMachine.addQueryInfoStateChangeListener(stateChangeListener);
+        stateMachine.addFinalQueryInfoStateChangeListener(stateChangeListener);
     }
 
     @Override

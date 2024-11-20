@@ -1,0 +1,183 @@
+SET SESSION grouped_execution = true;
+
+说明：tpch.disable_stream_partitioning 默认为 false
+
+1)
+select orderkey, count(*) from orders group by orderkey;
+
+getNextBatch:48, FixedSplitSource (com.facebook.presto.spi)
+getNextBatch:65, ConnectorAwareSplitSource (com.facebook.presto.split)
+fetchSplits:119, BufferingSplitSource$GetNextBatch (com.facebook.presto.split)
+fetchNextBatchAsync:100, BufferingSplitSource$GetNextBatch (com.facebook.presto.split)
+getNextBatch:60, BufferingSplitSource (com.facebook.presto.split)
+getNextBatch:60, LazySplitSource (com.facebook.presto.sql.planner)
+schedule:223, SourcePartitionedScheduler (com.facebook.presto.execution.scheduler)
+schedule:240, FixedSourcePartitionedScheduler (com.facebook.presto.execution.scheduler)
+schedule:434, LegacySqlQueryScheduler (com.facebook.presto.execution.scheduler)
+run:-1, 529583281 (com.facebook.presto.execution.scheduler.LegacySqlQueryScheduler$$Lambda$2309)
+call:511, Executors$RunnableAdapter (java.util.concurrent)
+run$$$capture:266, FutureTask (java.util.concurrent)
+run:-1, FutureTask (java.util.concurrent)
+ - Async stack trace
+<init>:151, FutureTask (java.util.concurrent)
+newTaskFor:87, AbstractExecutorService (java.util.concurrent)
+submit:111, AbstractExecutorService (java.util.concurrent)
+startScheduling:383, LegacySqlQueryScheduler (com.facebook.presto.execution.scheduler)
+start:372, LegacySqlQueryScheduler (com.facebook.presto.execution.scheduler)
+start:475, SqlQueryExecution (com.facebook.presto.execution)
+run:-1, Presto_null__testversion____20230320_150320_1 (com.facebook.presto.$gen)
+createQuery:306, SqlQueryManager (com.facebook.presto.execution)
+lambda$startExecution$8:211, LocalDispatchQuery (com.facebook.presto.dispatcher)
+runWorker:1149, ThreadPoolExecutor (java.util.concurrent)
+run:624, ThreadPoolExecutor$Worker (java.util.concurrent)
+run:748, Thread (java.lang)
+
+
+                                                                    Query Plan                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, _col1] => [orderkey:bigint, count:bigint]                                                                                      
+         Estimates: {rows: 15000 (263.67kB), cpu: 270000.00, memory: 270000.00, network: 270000.00}                                                
+         _col1 := count (1:26)                                                                                                                     
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, count:bigint]                                                                          
+             Estimates: {rows: 15000 (263.67kB), cpu: 270000.00, memory: 270000.00, network: 270000.00}                                            
+         - Aggregate(STREAMING)[orderkey] => [orderkey:bigint, count:bigint]                                                                       
+                 Estimates: {rows: 15000 (263.67kB), cpu: 270000.00, memory: 270000.00, network: 0.00}                                             
+                 count := "presto.default.count"(*) (1:26)                                                                                         
+             - TableScan[TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}] => [orderkey:bigint] 
+                     Estimates: {rows: 15000 (263.67kB), cpu: 135000.00, memory: 0.00, network: 0.00}                                              
+                     orderkey := tpch:orderkey (1:40)                                                                                              
+                     tpch:orderstatus                                                                                                              
+                         :: [["F"], ["O"], ["P"]]                                                                                                  
+                                                                                                                                                   
+(1 row)
+
+
+
+                                                                          Query Plan                                                                           
+---------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                           
+     Output layout: [orderkey, count]                                                                                                                          
+     Output partitioning: SINGLE []                                                                                                                            
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                             
+     - Output[orderkey, _col1] => [orderkey:bigint, count:bigint]                                                                                              
+             Estimates: {rows: 15000 (263.67kB), cpu: 270000.00, memory: 270000.00, network: 270000.00}                                                        
+             _col1 := count (1:45)                                                                                                                             
+         - RemoteSource[1] => [orderkey:bigint, count:bigint]                                                                                                  
+                                                                                                                                                               
+ Fragment 1 [tpch:orders:15000]                                                                                                                                
+     Output layout: [orderkey, count]                                                                                                                          
+     Output partitioning: SINGLE []                                                                                                                            
+     Stage Execution Strategy: DYNAMIC_LIFESPAN_SCHEDULE_GROUPED_EXECUTION
+     /*
+      * Aggregate算子和TableScan算子之间没有引入local ExchangeNode，是因为Aggregate算子使用了下游算子（即remote ExchangeNode）
+      * 偏好的stream parallelism，即Multiple。这个parallelism和TableScan算子自身的parallelism一致。
+      *
+      * 当然，TableScan的stream partitioning特性也符合Aggregate算子grouping keys的要求。
+      */
+     /* Aggregate显示为STREAMING，是因为TableScan在具有orderkey上定义了SortingProperty*/
+     - Aggregate(STREAMING)[orderkey] => [orderkey:bigint, count:bigint]                                                                                       
+             Estimates: {rows: 15000 (263.67kB), cpu: 270000.00, memory: 270000.00, network: 0.00}                                                             
+             count := "presto.default.count"(*) (1:45)                                                                                                         
+         - TableScan[TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = true] => [orderkey:bigint] 
+                 Estimates: {rows: 15000 (263.67kB), cpu: 135000.00, memory: 0.00, network: 0.00}                                                              
+                 orderkey := tpch:orderkey (1:59)                                                                                                              
+                 tpch:orderstatus                                                                                                                              
+                     :: [["F"], ["O"], ["P"]]                                                                                                                  
+                                                                                                                                                               
+                                                                                                                                                               
+(1 row)
+
+2)
+select orderdate, count(*) from orders group by orderdate;
+                                                                                              Query Plan
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderdate, _col1] => [orderdate:date, count:bigint]                                                                                                                                                              
+         _col1 := count (1:27)                                                                                                                                                                                             
+     - RemoteStreamingExchange[GATHER] => [orderdate:date, count:bigint]                                                                                                                                                   
+         - Project[projectLocality = LOCAL] => [orderdate:date, count:bigint]                                                                                                                                              
+             - Aggregate(FINAL)[orderdate][$hashvalue] => [orderdate:date, $hashvalue:bigint, count:bigint]                                                                                                                
+                     count := "presto.default.count"((count_8)) (1:27)                                                                                                                                                     
+                 - LocalExchange[HASH][$hashvalue] (orderdate) => [orderdate:date, count_8:bigint, $hashvalue:bigint]                                                                                                      
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_9] => [orderdate:date, count_8:bigint, $hashvalue_9:bigint]                                                                                         
+                         - Aggregate(PARTIAL)[orderdate][$hashvalue_10] => [orderdate:date, $hashvalue_10:bigint, count_8:bigint]                                                                                          
+                                 count_8 := "presto.default.count"(*) (1:27)                                                                                                                                               
+                             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderdate:date, $hashvalue_10:bigint] 
+                                     Estimates: {rows: 15000 (205.08kB), cpu: 75000.00, memory: 0.00, network: 0.00}/{rows: 15000 (205.08kB), cpu: 285000.00, memory: 0.00, network: 0.00}                                 
+                                     $hashvalue_10 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderdate), BIGINT'0')) (1:57)                                                                                  
+                                     orderdate := tpch:orderdate (1:41)                                                                                                                                                    
+                                     tpch:orderstatus                                                                                                                                                                      
+                                         :: [["F"], ["O"], ["P"]]                                                                                                                                                          
+                                                                                                                                                                                                                           
+(1 row)
+                                                                                                     Query Plan
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                    
+     Output layout: [orderdate, count]                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                     
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                      
+     - Output[orderdate, _col1] => [orderdate:date, count:bigint]                                                                                                                                                       
+             _col1 := count (1:46)                                                                                                                                                                                      
+         - RemoteSource[1] => [orderdate:date, count:bigint]                                                                                                                                                            
+                                                                                                                                                                                                                        
+ Fragment 1 [HASH]                                                                                                                                                                                                      
+     Output layout: [orderdate, count]                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                     
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                      
+     - Project[projectLocality = LOCAL] => [orderdate:date, count:bigint]                                                                                                                                               
+         - Aggregate(FINAL)[orderdate][$hashvalue] => [orderdate:date, $hashvalue:bigint, count:bigint]                                                                                                                 
+                 count := "presto.default.count"((count_8)) (1:46)                                                                                                                                                      
+             - LocalExchange[HASH][$hashvalue] (orderdate) => [orderdate:date, count_8:bigint, $hashvalue:bigint]                                                                                                       
+                 - RemoteSource[2] => [orderdate:date, count_8:bigint, $hashvalue_9:bigint]                                                                                                                             
+                                                                                                                                                                                                                        
+ Fragment 2 [tpch:orders:15000]                                                                                                                                                                                         
+     Output layout: [orderdate, count_8, $hashvalue_10]                                                                                                                                                                 
+     Output partitioning: HASH [orderdate][$hashvalue_10]                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                      
+     - Aggregate(PARTIAL)[orderdate][$hashvalue_10] => [orderdate:date, $hashvalue_10:bigint, count_8:bigint]                                                                                                           
+             count_8 := "presto.default.count"(*) (1:46)                                                                                                                                                                
+         - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderdate:date, $hashvalue_10:bigint] 
+                 Estimates: {rows: 15000 (336.91kB), cpu: 75000.00, memory: 0.00, network: 0.00}/{rows: 15000 (336.91kB), cpu: 285000.00, memory: 0.00, network: 0.00}                                                  
+                 $hashvalue_10 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderdate), BIGINT'0')) (1:76)                                                                                                   
+                 orderdate := tpch:orderdate (1:60)                                                                                                                                                                     
+                 tpch:orderstatus                                                                                                                                                                                       
+                     :: [["F"], ["O"], ["P"]]                                                                                                                                                                           
+                                                                                                                                                                                                                        
+                                                                                                                                                                                                                        
+(1 row)
+
+
+3)
+# 对比和case 1)和case 2)的区别
+set session tpch.disable_stream_partitioning = true;
+
+explain (type distributed) select orderkey, count(*) from orders group by orderkey;
+
+                                                                                       Query Plan
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]
+     Output layout: [orderkey, count]
+     Output partitioning: SINGLE []
+     Stage Execution Strategy: UNGROUPED_EXECUTION
+     - Output[PlanNodeId 8][orderkey, _col1] => [orderkey:bigint, count:bigint]
+             _col1 := count (1:45)
+         - RemoteSource[1] => [orderkey:bigint, count:bigint]
+
+ Fragment 1 [tpch:orders:15000]
+     Output layout: [orderkey, count]
+     Output partitioning: SINGLE []
+     Stage Execution Strategy: DYNAMIC_LIFESPAN_SCHEDULE_GROUPED_EXECUTION
+     - Aggregate(FINAL)[orderkey][PlanNodeId 3] => [orderkey:bigint, count:bigint]
+             count := "presto.default.count"((count_8)) (1:45)
+         - LocalExchange[PlanNodeId 182][HASH][$hashvalue] (orderkey) => [orderkey:bigint, count_8:bigint, $hashvalue:bigint]
+             - Project[PlanNodeId 203][projectLocality = LOCAL] => [orderkey:bigint, count_8:bigint, $hashvalue_9:bigint]
+                     $hashvalue_9 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:75)
+                 - Aggregate(PARTIAL)[orderkey][PlanNodeId 180] => [orderkey:bigint, count_8:bigint]
+                         count_8 := "presto.default.count"(*) (1:45)
+                     - TableScan[PlanNodeId 0][TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = true] => [orderkey:bigint]
+                             Estimates: {source: CostBasedSourceInfo, rows: 15000 (263.67kB), cpu: 135000.00, memory: 0.00, network: 0.00}
+                             orderkey := tpch:orderkey (1:59)
+                             tpch:orderstatus
+                                 :: [["F"], ["O"], ["P"]]
+
+
+(1 row)

@@ -17,6 +17,9 @@ import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.google.common.collect.ImmutableList;
 
+import java.util.Collections;
+import java.util.Set;
+
 public class TpchPlugin
         implements Plugin
 {
@@ -24,5 +27,10 @@ public class TpchPlugin
     public Iterable<ConnectorFactory> getConnectorFactories()
     {
         return ImmutableList.of(new TpchConnectorFactory());
+    }
+
+    public Set<Class<?>> getFunctions()
+    {
+        return Collections.singleton(TpchFunctions.class);
     }
 }

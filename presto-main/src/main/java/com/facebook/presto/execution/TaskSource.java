@@ -98,6 +98,10 @@ public class TaskSource
                     source.isNoMoreSplits());
         }
         else {
+            /**
+             * 这种情况是可能发生的，参考：
+             * {@link com.facebook.presto.execution.SqlTaskExecution.DriverSplitRunnerFactory#createDriver}
+             */
             // the specified source is older than this one
             return this;
         }

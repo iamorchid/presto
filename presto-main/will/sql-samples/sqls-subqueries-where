@@ -1,0 +1,73 @@
+set session tpch.disable_orders_partitioning=true;
+set session tpch.disable_lineitem_partitioning=true;
+set session join_distribution_type='PARTITIONED';
+
+
+/* 转化为InnerJoin, 具体如何实现的呢？ */
+explain (type distributed)
+select clerk, orderstatus, orderkey
+from orders
+where (select sum(quantity) from lineitem where orders.orderkey = orderkey and clerk like 'Clerk#0000004%') <= 1;
+
+
+
+StatementAnalyzer.Visitor::visitQuery
+  -> StatementAnalyzer.Visitor::visitQuerySpecification
+    -> StatementAnalyzer.Visitor::analyzeWhere
+      -> StatementAnalyzer.Visitor::analyzeExpression
+        
+ExpressionAnalyzer.Visitor::visitComparisonExpression // (select sum(quantity) from lineitem where orders.orderkey = orderkey) <= 1
+  -> ExpressionAnalyzer.Visitor::visitSubqueryExpression
+    -> StatementAnalyzer.Visitor::visitQuery
+      -> ...
+        -> StatementAnalyzer.Visitor::analyzeWhere
+          -> StatementAnalyzer.Visitor::analyzeExpression
+
+ExpressionAnalyzer.Visitor::visitComparisonExpression // orders.orderkey = orderkey
+  -> ExpressionAnalyzer.Visitor::visitDereferenceExpression // orders.orderkey
+    -> ExpressionAnalyzer.Visitor::handleResolvedField
+      -> columnReferences.put(NodeRef.of(node), fieldId)
+
+
+
+QueryPlaner::plan(Query)
+  -> QueryPlaner::plan(QuerySpecification)
+    -> QueryPlaner::filter
+
+QueryPlaner::filter // (select sum(quantity) from lineitem where orders.orderkey = orderkey) <= 1
+  -> SubqueryPlanner::handleSubqueries
+    -> SubqueryPlanner::appendScalarSubqueryApplyNodes
+      -> SubqueryPlanner::appendScalarSubqueryApplyNode
+        -> SubqueryPlanner::createPlanBuilder
+          -> RelationPlanner::visitQuery // 参见下面子查询处理
+        -> SubqueryPlanner::appendLateralJoin(subPlan, subqueryPlan, ...)
+          -> SubqueryPlanner::extractCorrelation
+            /* 重要: 对于子查询中的RowExpression, 如果它对应的仍然是DereferenceExpression, 这表明这个表达式引用了上层的column */
+            -> SubqueryPlanner::extractOuterColumnReferences
+  -> Expression rewrittenAfterSubqueries = subPlan.rewrite(predicate) // 此时得到的是: SymbolReference
+  // SymbolReference的类型在什么时间定义的？
+  // SymbolReference是对VariableReferenceExpression的引用, 而所有的VariableReferenceExpression都由
+  // VariableAllocator。基于VariableAllocator构建TypeProvider, 可以为SymbolReference提供类型查询。
+  -> rowExpression(rewrittenAfterSubqueries, ...) 
+
+
+QueryPlaner::plan(Query) // select sum(quantity) from lineitem where orders.orderkey = orderkey
+  -> QueryPlaner::plan(QuerySpecification)
+    -> QueryPlaner::filter // orders.orderkey = orderkey
+      -> Expression rewrittenAfterSubqueries = subPlan.rewrite(predicate);
+        -> TranslationMap::rewrite
+          /* 重要, 重要, 重要 */
+          -> TranslationMap.java/rewriteDereferenceExpression // 对于orders.orderkey, 返回的还是DereferenceExpression
+      -> rowExpression(rewrittenAfterSubqueries, ...)
+        -> ExpressionAnalyzer.analyzeExpression // 获取每个expression的类型
+          -> SqlToRowExpressionTranslator.translate
+            -> SqlToRowExpressionTranslator.Visitor::process // orders.orderkey = orderkey
+              -> supper.process // AstVisitor::process
+                -> SqlToRowExpressionTranslator.Visitor::visitComparisonExpression
+                  -> SqlToRowExpressionTranslator.Visitor::process(node.getLeft(), context)
+                    -> supper.process // AstVisitor::process
+                      -> SqlToRowExpressionTranslator.Visitor::visitDereferenceExpression // 返回UnresolvedSymbolExpression
+                    -> context.put(expression, rowExpression); // SqlToRowExpressionTranslator.Context
+              -> context.put(expression, rowExpression); // SqlToRowExpressionTranslator.Context
+                 
+              

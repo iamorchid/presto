@@ -1,0 +1,278 @@
+说明：
+当in列表中存在null, in返回结果要么为true, 要么为null. 另外, null和任何值比较, 结果都为null.
+即只能通过v is null来判断v是否为null, 而不能通过v = null来判断.
+
+presto:tiny> select 1 in (1, null);
+ _col0 
+-------
+ true  
+(1 row)
+
+presto:tiny> select null in (1, null);
+ _col0 
+-------
+ NULL  
+(1 row)
+
+presto:tiny> select null <> true;
+ _col0 
+-------
+ NULL  
+(1 row)
+
+presto:tiny> select null = null;
+ _col0 
+-------
+ NULL  
+(1 row)
+
+presto:tiny> select null is null;
+ _col0 
+-------
+ true  
+(1 row)
+
+presto:tiny> select 2 not in (1, null);
+ _col0 
+-------
+ NULL  
+(1 row)
+
+presto:tiny> select 2 in (1, null);
+ _col0 
+-------
+ NULL  
+(1 row)
+
+SemiJoin相关实现类:
+- TransformUncorrelatedInPredicateSubqueryToSemiJoin
+
+1)
+explain (type distributed)
+select clerk, orderkey from orders where orderkey in (select orderkey from lineitem where orderkey < 10);
+
+                                                                                                                                                          Query Plan                                                                                         >
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------->
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                         >
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                        >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                          >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - Output[PlanNodeId 16][clerk, orderkey] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                        >
+             Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,940.71, memory: 162.48, network: 227.73}                                                                                                                                     >
+         - RemoteSource[1] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                                           >
+                                                                                                                                                                                                                                                             >
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                                              >
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                        >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                          >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - FilterProject[PlanNodeId 276,12][filterPredicate = expr_8, projectLocality = LOCAL] => [clerk:varchar(15), orderkey:bigint]                                                                                                                           >
+             Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,875.46, memory: 162.48, network: 162.48}/{source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,940.71, memory: 162.48, network: 162.48}                                    >
+         - Project[PlanNodeId 637][projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), expr_8:boolean]                                                                                                                                          >
+                 Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,805.71, memory: 162.48, network: 162.48}                                                                                                                                 >
+             - SemiJoin[PlanNodeId 217][orderkey = orderkey_1][$hashvalue, $hashvalue_17] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bigint, expr_8:boolean]                                                                                         >
+                     Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,735.95, memory: 162.48, network: 162.48}                                                                                                                             >
+                     Distribution: REPLICATED                                                                                                                                                                                                                >
+                 - ScanFilterProject[PlanNodeId 0,542,635][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, filterPredicate = (orderkey) < (BIGINT'10'), projectLocality = LOCAL>
+                         Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 435,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 2 (65B), cpu: 870,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceI>
+                         $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (2:51)                                                                                                                                    >
+                         orderkey := tpch:orderkey (2:29)                                                                                                                                                                                                    >
+                         clerk := tpch:clerk (2:29)                                                                                                                                                                                                          >
+                         tpch:orderstatus                                                                                                                                                                                                                    >
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                        >
+                 - LocalExchange[PlanNodeId 594][SINGLE] () => [orderkey_1:bigint, $hashvalue_17:bigint]                                                                                                                                                     >
+                         Estimates: {source: CostBasedSourceInfo, rows: 9 (577B), cpu: 1,083,312.48, memory: 0.00, network: 162.48}                                                                                                                          >
+                     - RemoteSource[2] => [orderkey_1:bigint, $hashvalue_18:bigint]                                                                                                                                                                          >
+                                                                                                                                                                                                                                                             >
+ Fragment 2 [tpch:orders:15000]                                                                                                                                                                                                                              >
+     Output layout: [orderkey_1, $hashvalue_19]                                                                                                                                                                                                              >
+     Output partitioning: BROADCAST []                                                                                                                                                                                                                       >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - ScanFilterProject[PlanNodeId 2,543,636][table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, filterPredicate = (orderkey_1) < (BIGINT'10'), projectLocality = LOCAL] => [>
+             Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 541,575.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 9 (162B), cpu: 1,083,150.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: >
+             $hashvalue_19 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_1), BIGINT'0')) (2:76)                                                                                                                                           >
+             orderkey_1 := tpch:orderkey (2:76)                                                                                                                                                                                                              >
+                                                                                                                                                                                                                                                             >
+                                                                                                                                                                                                                                                             >
+(1 row)
+
+2) 采用partitioned方式进行semi join时, 会开启replicatedNulls
+// join_distribution_type默认值AUTOMATIC
+set session join_distribution_type='PARTITIONED';
+
+explain (type distributed)
+select clerk, orderkey from orders where orderkey in (select orderkey from lineitem where orderkey < 10);
+
+                                                                                                                                                          Query Plan                                                                                         >
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------->
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                         >
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                        >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                          >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - Output[PlanNodeId 16][clerk, orderkey] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                        >
+             Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,954,103.18, memory: 162.48, network: 227.73}                                                                                                                                     >
+         - RemoteSource[1] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                                           >
+                                                                                                                                                                                                                                                             >
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                                              >
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                        >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                          >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - FilterProject[PlanNodeId 276,12][filterPredicate = expr_8, projectLocality = LOCAL] => [clerk:varchar(15), orderkey:bigint]                                                                                                                           >
+             Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,954,037.93, memory: 162.48, network: 162.48}/{source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,954,103.18, memory: 162.48, network: 162.48}                                    >
+         - Project[PlanNodeId 637][projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), expr_8:boolean]                                                                                                                                          >
+                 Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,968.18, memory: 162.48, network: 162.48}                                                                                                                                 >
+             - SemiJoin[PlanNodeId 217][orderkey = orderkey_1][$hashvalue, $hashvalue_17] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bigint, expr_8:boolean]                                                                                         >
+                     Estimates: {source: CostBasedSourceInfo, rows: 2 (65B), cpu: 1,953,898.43, memory: 162.48, network: 162.48}                                                                                                                             >
+                     Distribution: PARTITIONED                                                                                                                                                                                                               >
+                 - ScanFilterProject[PlanNodeId 0,542,635][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, filterPredicate = (orderkey) < (BIGINT'10'), projectLocality = LOCAL>
+                         Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 435,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 2 (65B), cpu: 870,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceI>
+                         $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (2:51)                                                                                                                                    >
+                         orderkey := tpch:orderkey (2:29)                                                                                                                                                                                                    >
+                         clerk := tpch:clerk (2:29)                                                                                                                                                                                                          >
+                         tpch:orderstatus                                                                                                                                                                                                                    >
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                        >
+                 - LocalExchange[PlanNodeId 594][SINGLE] () => [orderkey_1:bigint, $hashvalue_17:bigint]                                                                                                                                                     >
+                         Estimates: {source: CostBasedSourceInfo, rows: 9 (577B), cpu: 1,083,474.95, memory: 0.00, network: 162.48}                                                                                                                          >
+                     - RemoteSource[2] => [orderkey_1:bigint, $hashvalue_18:bigint]                                                                                                                                                                          >
+                                                                                                                                                                                                                                                             >
+ Fragment 2 [tpch:orders:15000]                                                                                                                                                                                                                              >
+     Output layout: [orderkey_1, $hashvalue_19]                                                                                                                                                                                                              >
+     Output partitioning: tpch:orders:15000 (replicate nulls and any) [orderkey_1]                                                                                                                                                                           >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - ScanFilterProject[PlanNodeId 2,543,636][table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, filterPredicate = (orderkey_1) < (BIGINT'10'), projectLocality = LOCAL] => [>
+             Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 541,575.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 9 (162B), cpu: 1,083,150.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: >
+             $hashvalue_19 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_1), BIGINT'0')) (2:76)                                                                                                                                           >
+             orderkey_1 := tpch:orderkey (2:76)                                                                                                                                                                                                              >
+                                                                                                                                                                                                                                                             >
+                                                                                                                                                                                                                                                             >
+(1 row)
+
+
+3)
+set session join_distribution_type='PARTITIONED';
+
+explain (type distributed)
+select clerk, orderkey from orders where (orderkey in (select case when orderkey < 3 then null else orderkey end from lineitem)) is null;
+
+
+                                                                                                                            Query Plan                                                                                                                       >
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------->
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                         >
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                        >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                          >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - Output[PlanNodeId 15][clerk, orderkey] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                        >
+             Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 1,083,150.00, network: ?}                                                                                                                                                 >
+         - RemoteSource[1] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                                           >
+                                                                                                                                                                                                                                                             >
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                                              >
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                        >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                          >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - FilterProject[PlanNodeId 10,11][filterPredicate = IS_NULL(expr_8), projectLocality = LOCAL] => [clerk:varchar(15), orderkey:bigint]                                                                                                                   >
+             Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: 7,437,600.00, memory: 1,083,150.00, network: 1,083,150.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 1,083,150.00, network: 1,083,150.00}                           >
+         - Project[PlanNodeId 560][projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), expr_8:boolean]                                                                                                                                          >
+                 Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 6,972,600.00, memory: 1,083,150.00, network: 1,083,150.00}                                                                                                           >
+             - SemiJoin[PlanNodeId 203][orderkey = expr][$hashvalue, $hashvalue_17] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bigint, expr_8:boolean]                                                                                               >
+                     Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 6,507,600.00, memory: 1,083,150.00, network: 1,083,150.00}                                                                                                       >
+                     Distribution: PARTITIONED                                                                                                                                                                                                               >
+                 - ScanProject[PlanNodeId 0,558][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bi>
+                         Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 435,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 1,005,000.00, memory: 0.00, network: 0.00}              >
+                         $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (2:52)                                                                                                                                    >
+                         orderkey := tpch:orderkey (2:29)                                                                                                                                                                                                    >
+                         clerk := tpch:clerk (2:29)                                                                                                                                                                                                          >
+                         tpch:orderstatus                                                                                                                                                                                                                    >
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                        >
+                 - LocalExchange[PlanNodeId 521][SINGLE] () => [expr:bigint, $hashvalue_17:bigint]                                                                                                                                                           >
+                         Estimates: {source: CostBasedSourceInfo, rows: 60,175 (3.67MB), cpu: 3,249,450.00, memory: 0.00, network: 1,083,150.00}                                                                                                             >
+                     - RemoteSource[2] => [expr:bigint, $hashvalue_18:bigint]                                                                                                                                                                                >
+                                                                                                                                                                                                                                                             >
+ Fragment 2 [tpch:orders:15000]                                                                                                                                                                                                                              >
+     Output layout: [expr, $hashvalue_19]                                                                                                                                                                                                                    >
+     Output partitioning: tpch:orders:15000 (replicate nulls and any) [expr]                                                                                                                                                                                 >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                           >
+     - Project[PlanNodeId 559][projectLocality = LOCAL] => [expr:bigint, $hashvalue_19:bigint]                                                                                                                                                               >
+             Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 2,166,300.00, memory: 0.00, network: 0.00}                                                                                                                                 >
+             $hashvalue_19 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(expr), BIGINT'0')) (2:63)                                                                                                                                                 >
+         - ScanProject[PlanNodeId 2,3][table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [expr:bigint]                                           >
+                 Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 541,575.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 1,083,150.00, memory: 0.00, network: 0.00}                          >
+                 expr := SWITCH(BOOLEAN'true', WHEN((orderkey_1) < (BIGINT'3'), null), orderkey_1) (2:120)                                                                                                                                                   >
+                 orderkey_1 := tpch:orderkey (2:119)                                                                                                                                                                                                         >
+                                                                                                                                                                                                                                                             >
+                                                                                                                                                                                                                                                             >
+(1 row)
+
+4)'
+set session tpch.disable_orders_partitioning=true;
+set session join_distribution_type='PARTITIONED';
+
+explain (type distributed)
+select clerk, orderkey from orders where (orderkey in (select case when orderkey < 3 then null else orderkey end from lineitem)) is null;
+
+                                                                                                                        Query Plan                                                                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                      
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                                                                                       
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                        
+     - Output[PlanNodeId 15][clerk, orderkey] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                     
+             Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 1,083,150.00, network: ?}                                                                                                                                              
+         - RemoteSource[1] => [clerk:varchar(15), orderkey:bigint]                                                                                                                                                                                        
+
+ /* 这里fragment的并行度是怎么确定的？*/   
+ /* 
+  * 主要有Fragment中的ExchangeNode决定, 但Fragment中存在多个ExchangeNode时, 会要求它们PartitioningScheme中
+  * 使用的Partitioning必须兼容（BasePlanFragmenter#createRemoteStreamingExchange）。
+  */                                                                                                                                                                                                                                        
+ Fragment 1 [HASH]                                                                                                                                                                                                                                        
+     Output layout: [clerk, orderkey]                                                                                                                                                                                                                     
+     Output partitioning: SINGLE []                                                                                                                                                                                                                       
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                        
+     - FilterProject[PlanNodeId 10,11][filterPredicate = IS_NULL(expr_8), projectLocality = LOCAL] => [clerk:varchar(15), orderkey:bigint]                                                                                                                
+             Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: 8,007,600.00, memory: 1,083,150.00, network: 1,653,150.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 1,083,150.00, network: 1,653,150.00}                        
+         /* 去掉 $hashvalue */
+         - Project[PlanNodeId 570][projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), expr_8:boolean]                                                                                                                                       
+                 Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 7,542,600.00, memory: 1,083,150.00, network: 1,653,150.00}                                                                                                        
+             - SemiJoin[PlanNodeId 203][orderkey = expr][$hashvalue, $hashvalue_18] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bigint, expr_8:boolean]                                                                                            
+                     Estimates: {source: CostBasedSourceInfo, rows: 15,000 (424.80kB), cpu: 7,077,600.00, memory: 1,083,150.00, network: 1,653,150.00}                                                                                                    
+                     Distribution: PARTITIONED                                                                                                                                                                                                            
+                 - RemoteSource[2] => [orderkey:bigint, clerk:varchar(15), $hashvalue:bigint]                                                                                                                                                             
+                 - LocalExchange[PlanNodeId 527][SINGLE] () => [expr:bigint, $hashvalue_18:bigint]                                                                                                                                                        
+                         Estimates: {source: CostBasedSourceInfo, rows: 60,175 (3.67MB), cpu: 3,249,450.00, memory: 0.00, network: 1,083,150.00}                                                                                                          
+                     - RemoteSource[3] => [expr:bigint, $hashvalue_19:bigint]                                                                                                                                                                             
+                                                                                                                                                                                                                                                          
+ Fragment 2 [SOURCE]                                                                                                                                                                                                                                      
+     Output layout: [orderkey, clerk, $hashvalue_17]                                                                                                                                                                                                      
+     Output partitioning: HASH [orderkey][$hashvalue_17]                                                                                                                                                                                                  
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                        
+     - ScanProject[PlanNodeId 0,568][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderkey:bigint, clerk:varchar(15), $hashvalue_17:bigint] 
+             Estimates: {source: CostBasedSourceInfo, rows: 15,000 (556.64kB), cpu: 435,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (556.64kB), cpu: 1,005,000.00, memory: 0.00, network: 0.00}                       
+             $hashvalue_17 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (2:29)                                                                                                                                          
+             orderkey := tpch:orderkey (2:29)                                                                                                                                                                                                             
+             clerk := tpch:clerk (2:29)                                                                                                                                                                                                                   
+             tpch:orderstatus                                                                                                                                                                                                                             
+                 :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                          
+ Fragment 3 [tpch:orders:15000]                                                                                                                                                                                                                           
+     Output layout: [expr, $hashvalue_20]                                                                                                                                                                                                                 
+     Output partitioning: HASH (replicate nulls and any) [expr][$hashvalue_20]                                                                                                                                                                            
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                        
+     - Project[PlanNodeId 569][projectLocality = LOCAL] => [expr:bigint, $hashvalue_20:bigint]                                                                                                                                                            
+             Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 2,166,300.00, memory: 0.00, network: 0.00}                                                                                                                              
+             $hashvalue_20 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(expr), BIGINT'0')) (2:63)                                                                                                                                              
+         - ScanProject[PlanNodeId 2,3][table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [expr:bigint]                                        
+                 Estimates: {source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 541,575.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 60,175 (1.03MB), cpu: 1,083,150.00, memory: 0.00, network: 0.00}                       
+                 expr := SWITCH(BOOLEAN'true', WHEN((orderkey_1) < (BIGINT'3'), null), orderkey_1) (2:120)                                                                                                                                                
+                 orderkey_1 := tpch:orderkey (2:119)                                                                                                                                                                                                      
+                                                                                                                                                                                                                                                          
+                                                                                                                                                                                                                                                          
+(1 row)
+
+
+5)'
+set session tpch.disable_orders_partitioning=true;
+set session join_distribution_type='PARTITIONED';
+
+explain (type distributed)
+select clerk, orderkey from orders 
+    where (orderkey in (select case when orderkey < 3 then orderkey else null end from lineitem)) or 
+        (orderkey in (select case when orderkey % 1000 = 0 then orderkey else null end from lineitem));

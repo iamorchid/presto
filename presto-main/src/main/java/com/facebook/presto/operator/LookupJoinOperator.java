@@ -560,10 +560,10 @@ public class LookupJoinOperator
 
     /**
      * Produce rows matching join condition for the current probe position. If this method was called previously
-     * for the current probe position, calling this again will produce rows that wasn't been produced in previous
+     * for the current probe position, calling this again will produce rows that haven't been produced in previous
      * invocations.
      *
-     * @return true if all eligible rows have been produced; false otherwise
+     * @return false if yieldSignal is set or pageBuilder is full; otherwise, all eligible rows have been produced
      */
     private boolean joinCurrentPosition(LookupSource lookupSource, DriverYieldSignal yieldSignal)
     {

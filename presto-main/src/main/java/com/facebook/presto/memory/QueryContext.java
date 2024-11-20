@@ -18,6 +18,7 @@ import com.facebook.airlift.stats.GcMonitor;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskStateMachine;
+import com.facebook.presto.memory.context.AbstractAggregatedMemoryContext;
 import com.facebook.presto.memory.context.MemoryReservationHandler;
 import com.facebook.presto.memory.context.MemoryTrackingContext;
 import com.facebook.presto.operator.OperatorMemoryReservationSummary;
@@ -166,7 +167,7 @@ public class QueryContext
         // The coordinator will kill the query if the cluster runs out of memory.
         maxUserMemory = memoryPool.getMaxBytes();
         maxTotalMemory = memoryPool.getMaxBytes();
-        //  Mark future memory limit updates as unnecessary
+        // Mark future memory limit updates as unnecessary
         memoryLimitsInitialized = true;
     }
 
@@ -193,6 +194,17 @@ public class QueryContext
     private synchronized ListenableFuture<?> updateUserMemory(String allocationTag, long delta)
     {
         if (delta >= 0) {
+            /**
+             * operator context之类的更新user memory usage时，会调用到queryMemoryContext.userAggregateMemoryContext的
+             * updateBytes方法，并然后调用到这里的updateUserMemory。执行到下面的queryMemoryContext.getUserMemory()时，其
+             * 持锁路径为：
+             * 1）queryMemoryContext.userAggregateMemoryContext的同步锁
+             * 2）this（即当前QueryContext对象）的同步锁
+             * 3）queryMemoryContext.userAggregateMemoryContext的同步锁
+             *
+             * 因为同步锁时可重入的，因此这里是能保证持锁顺序的memory scope或level是从低到高的，不会和updateUserMemory本身
+             * 以及updateSystemMemory存在死锁行为。
+             */
             enforceUserMemoryLimit(queryMemoryContext.getUserMemory(), delta, maxUserMemory, allocationTag);
             long totalMemory = memoryPool.getQueryMemoryReservation(queryId);
             enforceTotalMemoryLimit(totalMemory, delta, maxTotalMemory, allocationTag);
@@ -207,6 +219,14 @@ public class QueryContext
     {
         long totalRevocableMemory = memoryPool.getQueryRevocableMemoryReservation(queryId);
         if (delta >= 0) {
+            /**
+             * revocable memory并没有包含到maxTotalMemory限制中，它有自己独立的限制（maxRevocableMemory比maxTotalMemory通常大）。
+             *
+             * 另外，通过{@link TaskContext#getTaskStats()}以及{@link com.facebook.presto.execution.StageExecutionInfo#create}
+             * 统计可以知道，totalMemoryReservation只包含了user memory和system memory，而没有包含revocable memory。
+             *
+             * 当前实现下任务的revocable memory是可以revoke回来的，因此并没有将它纳入到通常的内存占用中。
+             */
             enforceRevocableMemoryLimit(totalRevocableMemory, delta, maxRevocableMemory, allocationTag);
             return memoryPool.reserveRevocable(queryId, delta);
         }
@@ -233,6 +253,21 @@ public class QueryContext
         // the same RootAggregatedMemoryContext instance, and one of the threads will be blocked on the monitor of that
         // RootAggregatedMemoryContext instance even before calling the QueryContext methods (the monitors of
         // RootAggregatedMemoryContext instance and this will be acquired in the same order).
+        /**
+         * 上面注释重在说明：这个函数中不能调用queryMemoryContext.getUserMemory()，否则operator context之类的
+         * 在更新system memory usage时，持锁路径将为：queryMemoryContext.systemLocalMemoryContext的同步锁，
+         * this（即当前QueryContext对象）的同步锁，queryMemoryContext.userAggregateMemoryContext的同步锁。这
+         * 个和user memory usage的更新路径显然会造成死锁。
+         *
+         * 采用memoryPool.getQueryMemoryReservation后，持锁路径将为：
+         * 1）queryMemoryContext.systemAggregateMemoryContext的同步锁
+         * 2）this（即当前QueryContext对象）的同步锁
+         * #) 如果这里再获取queryMemoryContext.userAggregateMemoryContext的同步锁，则和{@link #updateUserMemory}会存在死锁
+         * 3）memoryPool的同步锁
+         *
+         * 可以看到，同步锁的memory scope或者level是从低到高的，只要按照类似固定的顺序持锁，就不会存在死锁。
+         *
+         */
         if (delta >= 0) {
             long totalMemory = memoryPool.getQueryMemoryReservation(queryId);
             enforceTotalMemoryLimit(totalMemory, delta, maxTotalMemory, allocationTag);
@@ -310,6 +345,14 @@ public class QueryContext
         // That's why instead of calling methods on queryMemoryContext to get the
         // user/revocable memory reservations, we call the MemoryPool to get the same
         // information.
+        /**
+         * 以前这个函数中使用了下面的操作，即会持有low-level memory context的同步锁。
+         * long originalReserved = queryMemoryContext.getUserMemory();
+         * long originalRevocableReserved = queryMemoryContext.getRevocableMemory();
+         *
+         * 参考：
+         * https://github.com/prestodb/presto/commit/e3021135f2c26ccac564f724feedfff038b536d0
+         */
         requireNonNull(newMemoryPool, "newMemoryPool is null");
         if (memoryPool == newMemoryPool) {
             // Don't unblock our tasks and thrash the pools, if this is a no-op

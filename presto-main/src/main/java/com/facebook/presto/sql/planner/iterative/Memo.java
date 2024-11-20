@@ -41,7 +41,7 @@ import static java.util.Objects.requireNonNull;
  * Stores a plan in a form that's efficient to mutate locally (i.e. without
  * having to do full ancestor tree rewrites due to plan nodes being immutable).
  * <p>
- * Each node in a plan is placed in a group, and it's children are replaced with
+ * Each node in a plan is placed in a group, and its children are replaced with
  * symbolic references to the corresponding groups.
  * <p>
  * For example, a plan like:

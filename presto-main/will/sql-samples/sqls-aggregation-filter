@@ -1,0 +1,198 @@
+1)
+explain (type distributed)
+select count(distinct(clerk)), count(distinct(clerk)) filter (where orderkey < 100) from orders;
+
+                                                                                                            Query Plan                                                                                                            
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                              
+     Output layout: [count, count_2]                                                                                                                                                                                              
+     Output partitioning: SINGLE []                                                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                
+     - Output[PlanNodeId 8][_col0, _col1] => [count:bigint, count_2:bigint]                                                                                                                                                       
+             Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,095,000.00, memory: 18.00, network: 330,000.00}                                                                                                       
+             _col0 := count (2:8)                                                                                                                                                                                                 
+             _col1 := count_2 (2:32)                                                                                                                                                                                              
+         - Aggregate[PlanNodeId 49] => [count:bigint, count_2:bigint]                                                                                                                                                             
+                 Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,095,000.00, memory: 18.00, network: 330,000.00}                                                                                                   
+                 count := "presto.default.count"(DISTINCT (clerk)) (2:8)                                                                                                                                                          
+                 count_2 := "presto.default.count"(DISTINCT (clerk)) (mask = expr) (2:32)                                                                                                                                         
+             - LocalExchange[PlanNodeId 275][SINGLE] () => [clerk:varchar(15), expr:boolean]                                                                                                                                      
+                     Estimates: {source: CostBasedSourceInfo, rows: 15,000 (263.67kB), cpu: 765,000.00, memory: 0.00, network: 330,000.00}                                                                                        
+                 - RemoteSource[1] => [clerk:varchar(15), expr:boolean]                                                                                                                                                           
+                                                                                                                                                                                                                                  
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                   
+     Output layout: [clerk, expr]                                                                                                                                                                                                 
+     Output partitioning: SINGLE []                                                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                
+     - ScanProject[PlanNodeId 0,1][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [clerk:varchar(15), expr:boolean]    
+             Estimates: {source: CostBasedSourceInfo, rows: 15,000 (322.27kB), cpu: 435,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (322.27kB), cpu: 765,000.00, memory: 0.00, network: 0.00} 
+             expr := (orderkey) < (BIGINT'100') (2:91)                                                                                                                                                                            
+             orderkey := tpch:orderkey (2:90)                                                                                                                                                                                     
+             clerk := tpch:clerk (2:90)                                                                                                                                                                                           
+             tpch:orderstatus                                                                                                                                                                                                     
+                 :: [["F"], ["O"], ["P"]]                                                                                                                                                                                         
+                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                  
+(1 row)
+
+
+2)
+explain (type distributed)
+
+// 这里加上filter后, 会导致优化器SingleDistinctAggregationToGroupBy和MultipleDistinctAggregationToMarkDistinct失效.
+// 从而保留Aggregation#isDistinct特性, 方便测试AggregationUtils#hasSingleNodeExecutionPreference.
+select orderpriority, count(distinct(clerk)), count(distinct(clerk)) filter (where orderkey < 100) from orders group by grouping sets ( (), (orderpriority));
+
+
+// 下面AddLocalExchanges在ProjectNode和signle-stream的AggregateNode之间引入LocalExchange是不明智的, 个人觉得可以
+// 在AddLocalExchanges中实现如下代码(即不要调用visitPlan) 或者 set session prefer_streaming_operators=true;
+
+@Override
+public PlanWithProperties visitPlan(PlanNode node, StreamPreferredProperties parentPreferences)
+{
+    return planAndEnforceChildren(
+            node,
+            parentPreferences.withoutPreference().withDefaultParallelism(session),
+            parentPreferences.withDefaultParallelism(session));
+}
+
+@Override
+public PlanWithProperties visitProject(ProjectNode node, StreamPreferredProperties parentPreferences)
+{
+    return planAndEnforceChildren(node, any().withOrderSensitivity(), any().withOrderSensitivity());
+}
+
+
+
+visitProject优化前:
+                                                                                                                            Query Plan                                                                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                              
+     Output layout: [orderpriority$gid, count, count_3]                                                                                                                                                                                                           
+     Output partitioning: SINGLE []                                                                                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                
+     - Output[PlanNodeId 8][orderpriority, _col1, _col2] => [orderpriority$gid:varchar(15), count:bigint, count_3:bigint]                                                                                                                                         
+             orderpriority := orderpriority$gid (2:8)                                                                                                                                                                                                             
+             _col1 := count (2:23)                                                                                                                                                                                                                                
+             _col2 := count_3 (2:47)                                                                                                                                                                                                                              
+         - Project[PlanNodeId 4][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), count:bigint, count_3:bigint]
+             /* AddLocalExchanges在visitProject时, 会走到默认实现visitPlan, 此时requiredProperties不为single, 导致ProjectNode和AggregateNode之间会插入LocalExchange*/                                                                                                                                                
+             - LocalExchange[PlanNodeId 391][ROUND_ROBIN] () => [orderpriority$gid:varchar(15), groupid:bigint, count:bigint, count_3:bigint]
+                 /* HashGenerationOptimizer.Rewriter#visitExchange引入, 为什么会引入这个??? Aggregate会要求hash, 但LocalExchange不需要hash, 因此会额外引入project来prune不需要的hashes*/                                                                                                                       
+                 - Project[PlanNodeId 425][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), groupid:bigint, count:bigint, count_3:bigint]   
+                     /* agg包含了不可以decomposable的函数, 会采用single node以及single stream的方式执行 */                                                                                                           
+                     - Aggregate[orderpriority$gid, groupid][$hashvalue][PlanNodeId 49] => [orderpriority$gid:varchar(15), groupid:bigint, $hashvalue:bigint, count:bigint, count_3:bigint]                                                                       
+                             count := "presto.default.count"(DISTINCT (clerk)) (2:23)                                                                                                                                                                             
+                             count_3 := "presto.default.count"(DISTINCT (clerk)) (mask = expr) (2:47)                                                                                                                                                             
+                         - LocalExchange[PlanNodeId 390][SINGLE] () => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint, $hashvalue:bigint]                                                                                        
+                             - RemoteSource[1] => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint, $hashvalue_17:bigint]                                                                                                          
+                                                                                                                                                                                                                                                                  
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                                                   
+     Output layout: [orderpriority$gid, clerk, expr, groupid, $hashvalue_18]                                                                                                                                                                                      
+     Output partitioning: SINGLE []                                                                                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                
+     - Project[PlanNodeId 424][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint, $hashvalue_18:bigint]                                                                                                 
+             $hashvalue_18 := combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderpriority$gid), BIGINT'0')), COALESCE($operator$hash_code(groupid), BIGINT'0')) (2:142)                                                                       
+         - GroupId[PlanNodeId 2][[], [orderpriority]] => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint]                                                                                                                         
+                 orderpriority$gid := orderpriority (2:142)                                                                                                                                                                                                       
+             - ScanProject[PlanNodeId 0,1][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderpriority:varchar(15), clerk:varchar(15), expr:boolean] 
+                     Estimates: {source: CostBasedSourceInfo, rows: 15,000 (1.36MB), cpu: 636,188.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (1.36MB), cpu: 1,167,376.00, memory: 0.00, network: 0.00}                           
+                     expr := (orderkey) < (BIGINT'100') (2:106)                                                                                                                                                                                                   
+                     orderpriority := tpch:orderpriority (2:105)                                                                                                                                                                                                  
+                     orderkey := tpch:orderkey (2:105)                                                                                                                                                                                                            
+                     clerk := tpch:clerk (2:105)                                                                                                                                                                                                                  
+                     tpch:orderstatus                                                                                                                                                                                                                             
+                         :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                                  
+(1 row)
+
+visitProject优化后:
+
+                                                                                                                            Query Plan                                                                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                              
+     Output layout: [orderpriority$gid, count, count_3]                                                                                                                                                                                                           
+     Output partitioning: SINGLE []                                                                                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                
+     - Output[PlanNodeId 8][orderpriority, _col1, _col2] => [orderpriority$gid:varchar(15), count:bigint, count_3:bigint]                                                                                                                                         
+             orderpriority := orderpriority$gid (2:8)                                                                                                                                                                                                             
+             _col1 := count (2:23)                                                                                                                                                                                                                                
+             _col2 := count_3 (2:47)                                                                                                                                                                                                                              
+         - Project[PlanNodeId 4][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), count:bigint, count_3:bigint]                                                                                                                                        
+             - Aggregate[orderpriority$gid, groupid][$hashvalue][PlanNodeId 49] => [orderpriority$gid:varchar(15), groupid:bigint, $hashvalue:bigint, count:bigint, count_3:bigint]                                                                               
+                     count := "presto.default.count"(DISTINCT (clerk)) (2:23)                                                                                                                                                                                     
+                     count_3 := "presto.default.count"(DISTINCT (clerk)) (mask = expr) (2:47)                                                                                                                                                                     
+                 - LocalExchange[PlanNodeId 390][SINGLE] () => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint, $hashvalue:bigint]                                                                                                
+                     - RemoteSource[1] => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint, $hashvalue_17:bigint]                                                                                                                  
+                                                                                                                                                                                                                                                                  
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                                                   
+     Output layout: [orderpriority$gid, clerk, expr, groupid, $hashvalue_18]                                                                                                                                                                                      
+     Output partitioning: SINGLE []                                                                                                                                                                                                                               
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                
+     - Project[PlanNodeId 419][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint, $hashvalue_18:bigint]                                                                                                 
+             $hashvalue_18 := combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderpriority$gid), BIGINT'0')), COALESCE($operator$hash_code(groupid), BIGINT'0')) (2:142)                                                                       
+         - GroupId[PlanNodeId 2][[], [orderpriority]] => [orderpriority$gid:varchar(15), clerk:varchar(15), expr:boolean, groupid:bigint]                                                                                                                         
+                 orderpriority$gid := orderpriority (2:142)                                                                                                                                                                                                       
+             - ScanProject[PlanNodeId 0,1][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderpriority:varchar(15), clerk:varchar(15), expr:boolean] 
+                     Estimates: {source: CostBasedSourceInfo, rows: 15,000 (1.36MB), cpu: 636,188.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15,000 (1.36MB), cpu: 1,167,376.00, memory: 0.00, network: 0.00}                           
+                     expr := (orderkey) < (BIGINT'100') (2:106)                                                                                                                                                                                                   
+                     orderpriority := tpch:orderpriority (2:105)                                                                                                                                                                                                  
+                     orderkey := tpch:orderkey (2:105)                                                                                                                                                                                                            
+                     clerk := tpch:clerk (2:105)                                                                                                                                                                                                                  
+                     tpch:orderstatus                                                                                                                                                                                                                             
+                         :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                                  
+(1 row)
+
+3)
+explain (type distributed) 
+
+/* 相比于2), 这个SQL的partial aggregation可以pushdown.*/
+presto:tiny> select orderpriority, count(*) from orders where orderkey < 0 group by grouping sets ( (), (orderpriority));
+ orderpriority | _col1 
+---------------+-------
+ NULL          |     0 
+(1 row)
+
+                                                                                                                                                        Query Plan                                                                                                             >
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------->
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                                                           >
+     Output layout: [orderpriority$gid, count]                                                                                                                                                                                                                                 >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                                            >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                             >
+     - Output[PlanNodeId 9][orderpriority, _col1] => [orderpriority$gid:varchar(15), count:bigint]                                                                                                                                                                             >
+             orderpriority := orderpriority$gid (2:8)                                                                                                                                                                                                                          >
+             _col1 := count (2:23)                                                                                                                                                                                                                                             >
+         - RemoteSource[1] => [orderpriority$gid:varchar(15), count:bigint]                                                                                                                                                                                                    >
+                                                                                                                                                                                                                                                                               >
+ Fragment 1 [HASH]                                                                                                                                                                                                                                                             >
+     Output layout: [orderpriority$gid, count]                                                                                                                                                                                                                                 >
+     Output partitioning: SINGLE []                                                                                                                                                                                                                                            >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                             >
+     - Project[PlanNodeId 5][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), count:bigint]                                                                                                                                                                         >
+         - Aggregate(FINAL)[orderpriority$gid, groupid][$hashvalue][PlanNodeId 4] => [orderpriority$gid:varchar(15), groupid:bigint, $hashvalue:bigint, count:bigint]                                                                                                          >
+                 count := "presto.default.count"((count_8)) (2:23)                                                                                                                                                                                                             >
+             - LocalExchange[PlanNodeId 473][HASH][$hashvalue] (orderpriority$gid, groupid) => [orderpriority$gid:varchar(15), groupid:bigint, count_8:bigint, $hashvalue:bigint]                                                                                              >
+                 - RemoteSource[2] => [orderpriority$gid:varchar(15), groupid:bigint, count_8:bigint, $hashvalue_9:bigint]                                                                                                                                                     >
+                                                                                                                                                                                                                                                                               >
+ Fragment 2 [tpch:orders:15000]                                                                                                                                                                                                                                                >
+     Output layout: [orderpriority$gid, groupid, count_8, $hashvalue_10]                                                                                                                                                                                                       >
+     Output partitioning: HASH [orderpriority$gid, groupid][$hashvalue_10]                                                                                                                                                                                                     >
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                                                             >
+     - Aggregate(PARTIAL)[orderpriority$gid, groupid][$hashvalue_10][PlanNodeId 477] => [orderpriority$gid:varchar(15), groupid:bigint, $hashvalue_10:bigint, count_8:bigint]                                                                                                  >
+             count_8 := "presto.default.count"(*) (2:23)                                                                                                                                                                                                                       >
+         - Project[PlanNodeId 517][projectLocality = LOCAL] => [orderpriority$gid:varchar(15), groupid:bigint, $hashvalue_10:bigint]                                                                                                                                           >
+                 $hashvalue_10 := combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderpriority$gid), BIGINT'0')), COALESCE($operator$hash_code(groupid), BIGINT'0')) (2:93)                                                                                 >
+             - GroupId[PlanNodeId 3][[], [orderpriority]] => [orderpriority$gid:varchar(15), groupid:bigint]                                                                                                                                                                   >
+                     orderpriority$gid := orderpriority (2:93)                                                                                                                                                                                                                 >
+                 - ScanFilterProject[PlanNodeId 0,413,2][table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, filterPredicate = (orderkey) < (BIGINT'0'), projectLocality = LOCAL] => [orderpriority:v>
+                         Estimates: {source: CostBasedSourceInfo, rows: 15,000 (1.17MB), cpu: 336,188.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 0 (0B), cpu: 672,376.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 0 (0B), cp>
+                         orderpriority := tpch:orderpriority (2:37)                                                                                                                                                                                                            >
+                         orderkey := tpch:orderkey (2:37)                                                                                                                                                                                                                      >
+                         tpch:orderstatus                                                                                                                                                                                                                                      >
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                                                                          >
+                                                                                                                                                                                                                                                                               >
+                                                                                                                                                                                                                                                                               >
+(1 row)

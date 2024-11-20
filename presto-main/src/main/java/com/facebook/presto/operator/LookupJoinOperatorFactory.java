@@ -138,6 +138,11 @@ public class LookupJoinOperatorFactory
     public Operator createOperator(DriverContext driverContext)
     {
         checkState(!closed, "Factory is already closed");
+
+        /**
+         * 同一个{@link Lifespan}下，{@link LookupJoinOperatorFactory}的不同operator实例是共享相同{@link LookupSourceFactory}
+         * 实例的。换句话说，即使probe的pipeline有多个{@link Driver}实例，也能保证它们使用的是同一份build table实例。
+         */
         LookupSourceFactory lookupSourceFactory = joinBridgeManager.getJoinBridge(driverContext.getLifespan());
 
         OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, LookupJoinOperator.class.getSimpleName());

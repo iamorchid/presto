@@ -1766,6 +1766,7 @@ protocol::PlanNodeId toPartitionedOutputNodeId(const protocol::PlanNodeId& id) {
 
 } // namespace
 
+// [star] VeloxQueryPlanConverterBase::toVeloxQueryPlan
 core::PlanFragment VeloxQueryPlanConverterBase::toVeloxQueryPlan(
     const protocol::PlanFragment& fragment,
     const std::shared_ptr<protocol::TableWriteInfo>& tableWriteInfo,
@@ -1870,6 +1871,8 @@ core::PlanFragment VeloxQueryPlanConverterBase::toVeloxQueryPlan(
             return planFragment;
           }
           case protocol::SystemPartitionFunction::HASH: {
+            // 采用SystemPartitioning方式时, bucket和partition是一一对应的.
+            // 参见coordinator: NodePartitioningManager#getNodePartitioningMap
             auto numPartitions = partitioningScheme.bucketToPartition->size();
 
             if (numPartitions == 1) {
@@ -1880,6 +1883,8 @@ core::PlanFragment VeloxQueryPlanConverterBase::toVeloxQueryPlan(
                   sourceNode);
               return planFragment;
             }
+
+            // 替换plan的root node (让plan具有PartitionedOutputNode)
             planFragment.planNode =
                 std::make_shared<core::PartitionedOutputNode>(
                     partitionedOutputNodeId,

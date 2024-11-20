@@ -46,6 +46,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
 
+// 这里定义通用的ConnectorPartitioningHandle
 public final class SystemPartitioningHandle
         implements ConnectorPartitioningHandle
 {
@@ -61,7 +62,19 @@ public final class SystemPartitioningHandle
 
     public static final PartitioningHandle SINGLE_DISTRIBUTION = createSystemPartitioning(SystemPartitioning.SINGLE, SystemPartitionFunction.SINGLE);
     public static final PartitioningHandle COORDINATOR_DISTRIBUTION = createSystemPartitioning(SystemPartitioning.COORDINATOR_ONLY, SystemPartitionFunction.SINGLE);
+
+    /**
+     * 这个包含了两方面的信息：
+     * 1. 将上游（即output方）结果写到多少个partitions（比如，SystemPartitioning.FIXED下，会选择和调度节点数量一样多的partitions）
+     * 1. 将下游（即read方）的任务调度到什么样节点上以及多少个节点（（比如，SystemPartitioning.FIXED会选择固定数量的节点）
+     * 2. 如何将上游的结果写到多个partitions中（比如，SystemPartitionFunction.HASH会将将结果hash到不同的partition下）
+     *
+     * 理论上，下游任务的数量并不需要和partitions一样多，比如一个task可以同时处理多个partitions。但目前的设计看起来是partition和node
+     * 有对应关系{@link NodePartitionMap#partitionToNode}，这就导致了partition其实和调度是关联的（因为和node关联了），即一般情况
+     * 下，对每个partition，下游都会产生一个任务。
+     */
     public static final PartitioningHandle FIXED_HASH_DISTRIBUTION = createSystemPartitioning(SystemPartitioning.FIXED, SystemPartitionFunction.HASH);
+
     public static final PartitioningHandle FIXED_ARBITRARY_DISTRIBUTION = createSystemPartitioning(SystemPartitioning.FIXED, SystemPartitionFunction.ROUND_ROBIN);
     public static final PartitioningHandle FIXED_BROADCAST_DISTRIBUTION = createSystemPartitioning(SystemPartitioning.FIXED, SystemPartitionFunction.BROADCAST);
     public static final PartitioningHandle SCALED_WRITER_DISTRIBUTION = createSystemPartitioning(SystemPartitioning.SCALED, SystemPartitionFunction.ROUND_ROBIN);

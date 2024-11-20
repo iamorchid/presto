@@ -480,7 +480,7 @@ public class TaskExecutor
 
             addNewEntrants();
         }
-        // call destroy outside of synchronized block as it is expensive and doesn't need a lock on the task executor
+        // call destroy outside synchronized block as it is expensive and doesn't need a lock on the task executor
         split.destroy();
     }
 

@@ -179,6 +179,16 @@ class AggregationAnalyzer
         this.warningCollector = warningCollector;
         this.session = session;
         this.functionResolution = new FunctionResolution(functionAndTypeResolver);
+
+        /**
+         * 对于SQL: select lower(clerk), (orderkey % 10) + 10 from orders group by clerk, orderkey % 10 limit 3;
+         * expressions   : [clerk, orderkey % 10]
+         * groupingFields: [clerk]
+         *
+         * select中, 可以直接使用expressions、groupingFields以及他们相关的表达式。然后, 下面的SQL是非法的, 因为select部分的
+         * orderkey + 10既不是由groupingFields组成的表达式, 也不是expressions包含或组成的表达式
+         * 非法SQL: select lower(clerk), orderkey + 10 from orders group by clerk, orderkey % 10 limit 3;
+         */
         this.expressions = groupByExpressions.stream()
                 .map(e -> ExpressionTreeRewriter.rewriteWith(new ParameterRewriter(analysis.getParameters()), e))
                 .collect(toImmutableList());
@@ -561,6 +571,11 @@ class AggregationAnalyzer
         {
             FieldId fieldId = checkAndGetColumnReferenceField(node, columnReferences);
 
+            /**
+             * 注意, 这里{@link ScopeReferenceExtractor#isFieldFromScope}不会考虑parent scope, 即下面仅仅
+             * 判断fieldId是不是select输出的字段 (不会考虑是否是table的字段). 同{@link Scope#resolveField}的
+             * 处理方式还是很不一样的.
+             */
             if (orderByScope.isPresent() && isFieldFromScope(fieldId, orderByScope.get())) {
                 return true;
             }
@@ -711,6 +726,11 @@ class AggregationAnalyzer
         public Boolean process(Node node, @Nullable Void context)
         {
             if (expressions.stream().anyMatch(node::equals)
+                    /**
+                     * 对于order by的场景, 如果order by中的表达式引用了select输出的field, 则使用该field
+                     * 来解析order by中的表达式。否则, 直接服用group by表达式的结果 (基于from产生的字段来
+                     * 解析表达式).
+                     */
                     && (!orderByScope.isPresent() || !hasOrderByReferencesToOutputColumns(node))
                     && !hasFreeReferencesToLambdaArgument(node, analysis)) {
                 return true;

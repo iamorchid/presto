@@ -128,7 +128,6 @@ public class TestLocalExchange
 
             LocalExchangeSink sink = sinkFactory.createSink();
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             assertSinkCanWrite(sink);
             assertSource(source, 0);
@@ -201,7 +200,6 @@ public class TestLocalExchange
             LocalExchangeSink sinkB = sinkFactory.createSink();
             assertSinkCanWrite(sinkB);
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             LocalExchangeSource sourceA = exchange.getSource(0);
             assertSource(sourceA, 0);
@@ -288,7 +286,6 @@ public class TestLocalExchange
             LocalExchangeSink sink = sinkFactory.createSink();
             assertSinkCanWrite(sink);
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             LocalExchangeSource sourceA = exchange.getSource(0);
             assertSource(sourceA, 0);
@@ -341,7 +338,6 @@ public class TestLocalExchange
             assertSinkCanWrite(sinkA);
             assertSinkCanWrite(sinkB);
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             LocalExchangeSource sourceA = exchange.getSource(0);
             assertSource(sourceA, 0);
@@ -407,7 +403,6 @@ public class TestLocalExchange
             LocalExchangeSink sink = sinkFactory.createSink();
             assertSinkCanWrite(sink);
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             LocalExchangeSource sourceA = exchange.getSource(0);
             assertSource(sourceA, 0);
@@ -533,7 +528,6 @@ public class TestLocalExchange
             LocalExchangeSink sinkB = sinkFactory.createSink();
             assertSinkCanWrite(sinkB);
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             LocalExchangeSource sourceA = exchange.getSource(0);
             assertSource(sourceA, 0);
@@ -581,7 +575,6 @@ public class TestLocalExchange
             LocalExchangeSink sinkB = sinkFactory.createSink();
             assertSinkCanWrite(sinkB);
             sinkFactory.close();
-            sinkFactory.noMoreSinkFactories();
 
             LocalExchangeSource sourceA = exchange.getSource(0);
             assertSource(sourceA, 0);

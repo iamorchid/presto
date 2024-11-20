@@ -87,6 +87,9 @@ public class FixedLifespanScheduler
         checkState(!initialScheduled);
         initialScheduled = true;
 
+        /**
+         * 每个节点上都会调度一个任务，concurrentLifespansPerTask限制的正是每个节点上任务的life span的处理并发。
+         */
         for (Map.Entry<InternalNode, IntListIterator> entry : nodeToDriverGroupsMap.entrySet()) {
             IntListIterator driverGroupsIterator = entry.getValue();
             int driverGroupsScheduled = 0;
@@ -102,6 +105,10 @@ public class FixedLifespanScheduler
         }
     }
 
+    /**
+     * {@link com.facebook.presto.execution.SqlStageExecution.StageTaskListener#updateCompletedDriverGroups}
+     * 保证只会通知新完成的lifespan （之前已经通知过的不会再通知）。
+     */
     public void onLifespanExecutionFinished(Iterable<Lifespan> newlyCompletelyExecutedDriverGroups)
     {
         checkState(initialScheduled);

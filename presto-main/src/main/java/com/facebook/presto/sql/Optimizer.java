@@ -30,6 +30,7 @@ import com.facebook.presto.spi.eventlistener.PlanOptimizerInformation;
 import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.PlannerUtils;
@@ -41,6 +42,7 @@ import com.facebook.presto.sql.planner.optimizations.PlanOptimizerResult;
 import com.facebook.presto.sql.planner.sanity.PlanChecker;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 import static com.facebook.presto.SystemSessionProperties.getQueryAnalyzerTimeout;
@@ -98,16 +100,31 @@ public class Optimizer
         this.explain = explain;
     }
 
+    private static String getQuickString(PlanNode node) {
+        StringBuilder strb = new StringBuilder();
+        for (PlanNode child : node.getSources()) {
+            strb.append(getQuickString(child)).append("|");
+        }
+        strb.append(node.getClass().getName());
+        for (VariableReferenceExpression expr : node.getOutputVariables()) {
+            strb.append(expr.getName()).append(",").append(expr.getType().toString());
+        }
+        return strb.toString();
+    }
+
     public Plan validateAndOptimizePlan(PlanNode root, PlanStage stage)
     {
         planChecker.validateIntermediatePlan(root, session, metadata, warningCollector);
 
         boolean enableVerboseRuntimeStats = SystemSessionProperties.isVerboseRuntimeStatsEnabled(session);
         if (stage.ordinal() >= OPTIMIZED.ordinal()) {
+            System.out.println("[will] --------------------------- perform optimization ---------------------------");
             for (PlanOptimizer optimizer : planOptimizers) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new PrestoException(QUERY_PLANNING_TIMEOUT, String.format("The query optimizer exceeded the timeout of %s.", getQueryAnalyzerTimeout(session).toString()));
                 }
+                final String str1 = getQuickString(root);
+
                 long start = System.nanoTime();
                 PlanOptimizerResult optimizerResult = optimizer.optimize(root, session, TypeProvider.viewOf(variableAllocator.getVariables()), variableAllocator, idAllocator, warningCollector);
                 requireNonNull(optimizerResult, format("%s returned a null plan", optimizer.getClass().getName()));
@@ -118,6 +135,11 @@ public class Optimizer
 
                 collectOptimizerInformation(optimizer, root, optimizerResult, types);
                 root = optimizerResult.getPlanNode();
+
+                final String str2 = getQuickString(root);
+                if (!Objects.equals(str1, str2)) {
+                    System.out.println("[will] effective optimizer: " + optimizer.getClass().getName());
+                }
             }
         }
 

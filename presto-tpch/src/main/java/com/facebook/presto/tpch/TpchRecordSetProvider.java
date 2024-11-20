@@ -26,6 +26,7 @@ import io.airlift.tpch.TpchColumnType;
 import io.airlift.tpch.TpchEntity;
 import io.airlift.tpch.TpchTable;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static com.facebook.presto.tpch.TpchRecordSet.createTpchRecordSet;
@@ -43,7 +44,16 @@ public class TpchRecordSetProvider
 
         TpchTable<?> tpchTable = TpchTable.getTable(tableName);
 
-        return getRecordSet(tpchTable, columns, tpchSplit.getTableHandle().getScaleFactor(), tpchSplit.getPartNumber(), tpchSplit.getTotalParts(), tpchSplit.getPredicate());
+        RecordSet recordSet = getRecordSet(tpchTable, columns, tpchSplit.getTableHandle().getScaleFactor(),
+                tpchSplit.getPartNumber(), tpchSplit.getTotalParts(), tpchSplit.getPredicate());
+
+        String failedPartitions = session.getProperty(TpchSessionProperties.FAILED_PARTITIONS, String.class);
+        final String part = String.valueOf(tpchSplit.getPartNumber());
+        if ("all".equals(failedPartitions) || Arrays.asList(failedPartitions.split(",")).contains(part)) {
+            ((TpchRecordSet)recordSet).enableReadFail();
+        }
+
+        return recordSet;
     }
 
     public <E extends TpchEntity> RecordSet getRecordSet(

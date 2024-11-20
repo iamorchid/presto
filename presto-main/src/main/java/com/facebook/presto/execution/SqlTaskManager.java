@@ -189,6 +189,9 @@ public class SqlTaskManager
                         taskId,
                         locationFactory.createLocalTaskLocation(taskId),
                         nodeInfo.getNodeId(),
+                        /**
+                         * 从这里可以看到，如果同一个query的多个task运行在同一个节点上，它们使用的QueryContext是同一个
+                         */
                         queryContexts.getUnchecked(taskId.getQueryId()),
                         sqlTaskExecutionFactory,
                         exchangeClientSupplier,
@@ -258,12 +261,19 @@ public class SqlTaskManager
     {
         taskManagementExecutor.scheduleWithFixedDelay(() -> {
             try {
+                /**
+                 * task结束后，他的信息还有保留一段时间（见{@link TaskManagerConfig#infoMaxAge}），
+                 * 默认值为15分钟。
+                 */
                 removeOldTasks();
             }
             catch (Throwable e) {
                 log.error(e, "Error removing old tasks");
             }
             try {
+                /**
+                 * 如果task的状态长时间没有获取（比如coordinator crash后重启），则对它进行清理。
+                 */
                 failAbandonedTasks();
             }
             catch (Throwable e) {
@@ -504,6 +514,9 @@ public class SqlTaskManager
         return tasks.getUnchecked(taskId).abort();
     }
 
+    /**
+     * 这里是删除已经完成的、保留时间超过阈值的任务，没有完成的任务则不会进行清理。
+     */
     public void removeOldTasks()
     {
         DateTime oldestAllowedTask = DateTime.now().minus(infoCacheTime.toMillis());
@@ -512,6 +525,8 @@ public class SqlTaskManager
             try {
                 DateTime endTime = taskInfo.getStats().getEndTime();
                 if (endTime != null && endTime.isBefore(oldestAllowedTask)) {
+                    log.warn("remove old task: createTime=%s, endTime=%s",
+                            taskInfo.getStats().getCreateTime(), endTime);
                     tasks.asMap().remove(taskId);
                 }
             }

@@ -56,6 +56,10 @@ public class OutputBufferMemoryManager
 
     private final AtomicBoolean blockOnFull = new AtomicBoolean(true);
 
+    /**
+     * 由{@link com.facebook.presto.execution.SqlTask#SqlTask}可以知道，{@link OutputBuffer}使用
+     * 的{@link LocalMemoryContext}是task级别的。
+     */
     private final Supplier<LocalMemoryContext> systemMemoryContextSupplier;
     private final Executor notificationExecutor;
 
@@ -91,6 +95,10 @@ public class OutputBufferMemoryManager
             currentBufferedBytes = bufferedBytes.addAndGet(bytesAdded);
             ListenableFuture<?> blockedOnMemory = systemMemoryContext.setBytes(currentBufferedBytes);
             if (!blockedOnMemory.isDone()) {
+                /**
+                 * 如果对应的底层{@link com.facebook.presto.memory.MemoryPool}内存一直不可用，则返回的
+                 * blockedOnMemory将是相同的对象，那么callback只需要注册一次即可。
+                 */
                 if (this.blockedOnMemory != blockedOnMemory) {
                     this.blockedOnMemory = blockedOnMemory;
                     waitForMemory = blockedOnMemory; // only register a callback when blocked and the future is different
@@ -108,7 +116,7 @@ public class OutputBufferMemoryManager
             }
         }
         peakMemoryUsage.accumulateAndGet(currentBufferedBytes, Math::max);
-        // Notify listeners outside of the critical section
+        // Notify listeners outside the critical section
         notifyListener(notifyUnblocked);
         if (waitForMemory != null) {
             waitForMemory.addListener(this::onMemoryAvailable, notificationExecutor);
@@ -126,12 +134,21 @@ public class OutputBufferMemoryManager
         return bufferBlockedFuture;
     }
 
+    /**
+     * 如果底层MemoryPool的内存足够，即使output buffer使用的内存达到了{@link #maxBufferedBytes}
+     * 限制，也不再阻塞output buffer的使用方。一般在task将要退出（比如失败、abort、正常结束等）时，会
+     * 调用{@link #setNoBlockOnFull()}，来加快task下driver的退出。
+     */
     public void setNoBlockOnFull()
     {
         SettableFuture<?> future = null;
         synchronized (this) {
             blockOnFull.set(false);
 
+            /**
+             * 如果此时底层MemoryPool的内存不足，则不会unblock之前的output buffer的使用方。将会等到
+             * MemoryPool内存可用时，通过{@link #onMemoryAvailable()}来进行unblock。
+             */
             if (blockedOnMemory.isDone()) {
                 future = this.bufferBlockedFuture;
                 this.bufferBlockedFuture = null;
@@ -189,6 +206,9 @@ public class OutputBufferMemoryManager
 
     public synchronized void close()
     {
+        /**
+         * [question] 这个函数应该强制unblock在{@link #bufferBlockedFuture}上的使用方？
+         */
         updateMemoryUsage(-bufferedBytes.get());
         LocalMemoryContext memoryContext = getSystemMemoryContextOrNull();
         if (memoryContext != null) {

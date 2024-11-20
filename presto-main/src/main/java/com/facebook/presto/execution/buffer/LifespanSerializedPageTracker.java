@@ -92,6 +92,14 @@ final class LifespanSerializedPageTracker
         return outstandingPageCount == null || outstandingPageCount.get() == 0;
     }
 
+    /**
+     * 执行到下面方法的主题逻辑大致为：
+     * 1）消费端ack已经消费的数据，{@link PartitionedOutputBuffer#acknowledge}
+     * 2）减少buffer中page的引用计数，{@link SerializedPageReference#dereferencePages}
+     * 3）执行下面的onPagesReleased
+     * 4）执行lifespanCompletionCallback，对应于{@link com.facebook.presto.execution.SqlTaskExecution.Status#checkLifespanCompletion}
+     * 5）更新output buffer内存使用统计，以便unblock之前因为buffer满而导致的output阻塞的driver
+     */
     @Override
     public void onPagesReleased(Lifespan lifespan, int releasedPageCount, long releasedSizeInBytes)
     {

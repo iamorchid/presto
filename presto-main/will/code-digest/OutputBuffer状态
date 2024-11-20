@@ -1,0 +1,201 @@
+## task正常结束
+
+1)
+SqlTaskExecution#checkTaskCompletion() {
+    // ... (此时，drivers全部close())
+
+    // 下面会将outputBuffer状态设置为FLUSHING，同时告诉outputBuffer，
+    // 数据消费完成后，可以给下游返回bufferComplete。
+    outputBuffer.setNoMorePages();
+
+    // ... (此时，outputBuffer.isFinished()为false)
+}
+
+2)
+ClientBuffer#getPages返回bufferComplete为true （PageBufferClient会处理这个flag）
+
+3)
+PageBufferClient#sendDelete()发送abort请求来关闭对应的ClientBuffer
+
+4）
+a) 执行outputBuffer#abort，关闭bufferId对应的ClientBuffer
+b) 如果所有的ClientBuffer都已经关闭，则将outputBuffer的状态置为Finished 并 进行清理操作（即调用outputBuffer#destroy)
+
+5)
+SqlTaskExecution#SqlTaskExecution {
+    outputBuffer.addStateChangeListener(new CheckTaskCompletionOnBufferFinish(SqlTaskExecution.this));
+}
+
+CheckTaskCompletionOnBufferFinish#stateChanged {
+    if (newState == BufferState.FINISHED) {
+        sqlTaskExecution.checkTaskCompletion();
+    }
+}
+
+SqlTaskExecution#checkTaskCompletion() {
+    // ... (此时，outputBuffer.isFinished()为True)
+
+    // 下面会将task的状态设置为FINISHED
+    taskStateMachine.finished();
+}
+
+6)
+当SqlTask的状态变为done后，会执行相关的listener （参考文件《task状态》），进行相关清理
+
+7）
+a）ContinuousTaskStatusFetcher#updateTaskStatus 触发
+b）
+HttpRemoteTask#HttpRemoteTask {
+    taskStatusFetcher.addStateChangeListener(newStatus -> {
+        TaskState state = newStatus.getState();
+        if (state.isDone()) {
+            cleanUpTask();
+        }
+        // ...
+    });
+}
+c) HttpRemoteTask#cleanUpTask
+
+8)
+TaskResource#deleteTask
+
+
+## task执行抛出异常时
+1)
+a) PrioritizedSplitRunner#process()中，split.processFor(SPLIT_RUN_QUANTA)抛出异常
+b) finishedFuture.setException(e)
+
+2)
+SqlTaskExecution#enqueueDriverSplitRunner {
+    Futures.addCallback(finishedFuture, new FutureCallback<Object>() {
+        // ...
+
+        @Override
+        public void onFailure(Throwable cause)
+        {
+            taskStateMachine.failed(cause);
+            // ...
+        }
+    }, notificationExecutor);
+}
+
+3)
+SqlTask#initialize {
+    taskStateMachine.addStateChangeListener(new StateChangeListener<TaskState>() {
+        @Override
+        public void stateChanged(TaskState newState)
+        {
+            // ...
+            if (newState == FAILED || newState == ABORTED) {
+                // fail outputBuffer可以block住消费端，等待coordinator进行abort整个query
+                outputBuffer.fail();
+            }
+            // ...
+        }
+    });
+}
+
+class SqlTaskExecution
+{
+    private static TaskHandle createTaskHandle(...)
+    {
+        // ....
+        taskStateMachine.addStateChangeListener(state -> {
+            if (state.isDone()) {
+                // 这里会close所有的drivers，进而执行ExchangeOperator#close->ExchangeClient#close->PageBufferClient#close，
+                // 进而调用上有任务的TaskResource#abortResults RPC（即告诉上游，可以释放output）
+                taskExecutor.removeTask(taskHandle);
+                for (DriverFactory factory : localExecutionPlan.getDriverFactories()) {
+                    factory.noMoreDrivers();
+                }
+            }
+        });
+        return taskHandle;
+    }
+}
+
+4)
+HttpRemoteTask#HttpRemoteTask {
+    taskStatusFetcher.addStateChangeListener(newStatus -> {
+        TaskState state = newStatus.getState();
+        if (state.isDone()) {
+            // 调用TaskResource#deleteTask（abort属性为true），清理远端task
+            cleanUpTask();
+        }
+    });
+}
+
+SqlStageExecution#scheduleTask {
+    // ...
+
+    // StageTaskListener 会调用 SqlStageExecution#updateTaskStatus
+    task.addStateChangeListener(new StageTaskListener(taskId));
+
+    // ...
+}
+
+SqlStageExecution#updateTaskStatus {
+    TaskState taskState = taskStatus.getState();
+    if (taskState == TaskState.FAILED) {
+        // ...
+
+        // 这里的stateMachine为StageExecutionStateMachine
+        stateMachine.transitionToFailed(failure);
+    }
+    // ...
+}
+
+5）
+SqlQueryScheduler#addStateChangeListeners {
+    stageExecution.addStateChangeListener(state -> {
+        if (state == FAILED) {
+            // ...
+            queryStateMachine.transitionToFailed(failureException);
+        }
+    });
+}
+
+6)
+SqlQueryExecution#SqlQueryExecution {
+    // 这里的stateMachine为QueryStateMachine
+    stateMachine.addStateChangeListener(state -> {
+        // ...
+        SqlQuerySchedulerInterface scheduler = queryScheduler.get();
+        if (scheduler != null) {
+            // 这里会abort所有其他的stages，进而abort所有的tasks
+            scheduler.abort();
+        }
+    })
+}
+
+Query#create {
+    result.queryManager.addStateChangeListener(result.getQueryId(), (state) -> {
+        if (state.isDone()) {
+            QueryInfo queryInfo = queryManager.getFullQueryInfo(result.getQueryId());
+            result.closeExchangeClientIfNecessary(queryInfo) {
+                if ((queryInfo.getState() == FAILED) ||
+                        (queryInfo.getState().isDone() && !queryInfo.getOutputStage().isPresent())) {
+                    // 让OutputStage的output buffer尽快释放
+                    exchangeClient.close();
+                }
+            };
+        }
+    });
+}
+
+7)
+// 这里的createQuery其实并非创建query，而是在query结束排队、资源等待后，开始调度query
+SqlQueryManager#createQuery(QueryExecution queryExecution)
+{
+    // 这里要触发，需要等待所有stage及其相关的tasks都变为done才行，不仅仅是query自身
+    // 的状态变为done（此时它的tasks可能还处于running）。
+    queryExecution.addFinalQueryInfoListener(finalQueryInfo -> {
+        try {
+            queryMonitor.queryCompletedEvent(finalQueryInfo);
+        }
+        finally {
+            // execution MUST be added to the expiration queue or there will be a leak
+            queryTracker.expireQuery(queryExecution.getQueryId());
+        }
+    });
+}

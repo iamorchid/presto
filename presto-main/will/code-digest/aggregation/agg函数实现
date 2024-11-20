@@ -1,0 +1,17 @@
+参考:
+CountColumn vs CountAggregation
+RealAverageAggregation as AverageAggregations
+
+
+CountAggregation对应的签名: presto.default.count():bigint
+
+
+CountColumn对应的签名: presto.default.count<T>(T):bigint
+
+
+AverageAggregations    : select orderpriority, avg(orderkey) from orders where orderkey < 0 group by grouping sets ( (), (orderpriority));
+RealAverageAggregation : select orderpriority, avg(cast(orderkey as real)) from orders where orderkey < 0 group by grouping sets ( (), (orderpriority));
+
+CREATE TEMPORARY FUNCTION square(x int)
+RETURNS int
+RETURN x * x

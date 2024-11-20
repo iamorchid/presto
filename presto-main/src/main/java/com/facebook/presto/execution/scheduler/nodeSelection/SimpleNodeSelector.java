@@ -109,6 +109,7 @@ public class SimpleNodeSelector
     @Override
     public void lockDownNodes()
     {
+        // 之前的supplier返回的NodeMap可能会改变，这里使用返回固定内容的supplier
         nodeMap.set(Suppliers.ofInstance(nodeMap.get().get()));
     }
 
@@ -144,7 +145,9 @@ public class SimpleNodeSelector
         NodeMap nodeMap = this.nodeMap.get().get();
         NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMap, existingTasks);
 
+        // 这里除了返回当前运行任务的node外，还会尝试选择新的节点
         List<InternalNode> eligibleNodes = getEligibleNodes(maxTasksPerStage, nodeMap, existingTasks);
+
         NodeSelection randomNodeSelection = new RandomNodeSelection(eligibleNodes, minCandidates);
         Set<InternalNode> blockedExactNodes = new HashSet<>();
         boolean splitWaitingForAnyNode = false;

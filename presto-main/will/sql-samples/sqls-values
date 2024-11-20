@@ -1,0 +1,5 @@
+SELECT *
+FROM (VALUES
+    ('John Doe', 30),
+    ('Jane Doe', 25)
+) AS t(name, age);

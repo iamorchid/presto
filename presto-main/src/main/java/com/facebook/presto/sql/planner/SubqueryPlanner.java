@@ -242,6 +242,7 @@ class SubqueryPlanner
         subqueryPlan = subqueryPlan.withNewRoot(new EnforceSingleRowNode(subPlan.getRoot().getSourceLocation(), idAllocator.getNextId(), subqueryPlan.getRoot()));
         subqueryPlan = subqueryPlan.appendProjections(coercions, variableAllocator, idAllocator, session, metadata, sqlParser, analysis, context);
 
+        // 上面createPlanBuilder会将uncoercedScalarSubquery添加到plan的TranslationMap中
         VariableReferenceExpression uncoercedScalarSubqueryVariable = subqueryPlan.translate(uncoercedScalarSubquery);
         subPlan.getTranslations().put(uncoercedScalarSubquery, uncoercedScalarSubqueryVariable);
 
@@ -489,7 +490,7 @@ class SubqueryPlanner
     }
 
     /**
-     * Checks if give reference expression can resolved within given plan.
+     * Checks if given reference expression can be resolved within the given plan.
      */
     private static Optional<Expression> tryResolveMissingExpression(PlanBuilder subPlan, Expression expression)
     {
@@ -526,6 +527,9 @@ class SubqueryPlanner
         // at this point all the column references are already rewritten to SymbolReference
         // when reference expression is not rewritten that means it cannot be satisfied within given PlaNode
         // see that TranslationMap only resolves (local) fields in current scope
+        /**
+         * 参考：rewriteDereferenceExpression中对DereferenceExpression的处理
+         */
         return ExpressionExtractor.extractExpressions(planNode).stream()
                 .filter(rowExpression -> context.getTranslatorContext().getExpressionMap().containsKey(rowExpression))
                 .map(rowExpression -> context.getTranslatorContext().getExpressionMap().get(rowExpression))

@@ -264,6 +264,17 @@ public class PickTableLayout
             Metadata metadata,
             DomainTranslator domainTranslator)
     {
+        /**
+         * 进行下推时，仅仅会考虑确定性的谓词，因此首先将谓词分为确定性和非确定性这两部分，比如 random() > 0.5 这种谓词就不是确定性的，
+         * 而 state = 'SUCCESS' 或者 lower(state) = 'success' 则是确定性的。
+         *
+         * 对于确定性的谓词，通过{@link DomainTranslator#fromPredicate}将它们转成列的值域形式，即{@link TupleDomain}。但确定性
+         * 谓词并不都支持转换为{@link TupleDomain} 或者 并不都能精确地转换（此时TupleDomain是原始谓词的超集），因此这些谓词肯定需要
+         * 在执行引擎层面进行确认，即对应{@link DomainTranslator.ExtractionResult#remainingExpression}。
+         *
+         * 而对于转换后的TupleDomain，底层connector并不都支持下推，对于不支持下推的列，会放到{@link TableLayoutResult#unenforcedConstraint}中。
+         */
+
         // don't include non-deterministic predicates
         LogicalRowExpressions logicalRowExpressions = new LogicalRowExpressions(
                 new RowExpressionDeterminismEvaluator(metadata.getFunctionAndTypeManager()),
@@ -275,13 +286,27 @@ public class PickTableLayout
                 deterministicPredicate,
                 BASIC_COLUMN_EXTRACTOR);
 
+        /**
+         * 对于{@link TupleDomain}而言，如果某列没有在TupleDomain定义域值，则表明包含的是该列的所有域值。注意，在做intersect时，
+         * 并不是简单的做map的交集，对于只存在于left或者right TupleDomain中的列，总是会保留到交集结果中的。
+         */
         TupleDomain<ColumnHandle> newDomain = decomposedPredicate.getTupleDomain()
                 .transform(variableName -> node.getAssignments().get(variableName))
                 .intersect(node.getEnforcedConstraint());
 
         Map<ColumnHandle, VariableReferenceExpression> assignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
 
-        Constraint<ColumnHandle> constraint;
+        /**
+         * pruneWithPredicateExpression表示的含义：是否对表达式谓词进行裁剪。
+         *
+         * 比如，对于 status=400 形式的谓词，底层table是容易确定是否能进行下推的。但对于 f(status)=400 形式的谓词，底层table
+         * 就不容易确定了。这两种形式的谓词约束分别对应{@link Constraint#summary} 和 {@link Constraint#predicate}。
+         *
+         * {@link Constraint#summary} 通常容易转成底层table的过滤条件，但 {@link Constraint#predicate} 却并不总可以（比如，
+         * 不支持presto谓词中的函数）。但对于枚举类型的列值，底层connector可以通过{@link Constraint#predicate}来判断哪些值是
+         * 符合要求的，具体用法参见{@link com.facebook.presto.tpch.TpchMetadata#filterValues}。
+         */
+        final Constraint<ColumnHandle> constraint;
         if (pruneWithPredicateExpression) {
             LayoutConstraintEvaluatorForRowExpression evaluator = new LayoutConstraintEvaluatorForRowExpression(
                     metadata,
@@ -323,7 +348,11 @@ public class PickTableLayout
                 node.getOutputVariables(),
                 node.getAssignments(),
                 node.getTableConstraints(),
+                /**
+                 * 参考{@link TableScanNode#getCurrentConstraint()}，这里包含已经下推的谓词。
+                 */
                 layout.getLayout().getPredicate(),
+                // layout.getUnenforcedConstraint()指的是没有下推到connector的那些谓词。
                 computeEnforced(newDomain, layout.getUnenforcedConstraint()));
 
         // The order of the arguments to combineConjuncts matters:

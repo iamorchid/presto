@@ -1,0 +1,22 @@
+StatementAnalyzer.Visitor#visitTable:
+    analysis.setColumn(field, columnHandle);
+    analysis.registerTable(table, tableHandle.get());
+    analysis.setScope(node, scope);
+
+StatementAnalyzer.Visitor#visitQuerySpecification:
+    analysis.recordSubqueries(node, expressionAnalysis); // in analyzeSelect
+    analysis.setOutputExpressions(node, result); // in analyzeSelect
+    analysis.setScope(node, scope);
+
+
+理解下面SQL具体执行过程：
+select orderkey + 10, orderkey + 5 as ok from orders order by orderkey + 10, orderkey + 2, ok limit 1;
+
+// orderkey / 100 为 complex aggregate by expression
+select shippriority, count(orderkey) as cnt from orders group by clerk, shippriority, orderkey / 100 order by cnt desc, clerk, orderkey / 100 limit 1;
+
+// 但下面的语句会报错: '(orderkey / 10)' must be an aggregate expression or appear in GROUP BY clause
+select shippriority, count(orderkey) as cnt from orders group by clerk, shippriority, orderkey / 100 order by cnt desc, clerk, orderkey / 10  limit 1;
+
+理解下下面的语句为啥报错: failed: line 1:8: Column 'orderkey' cannot be resolved
+select orderkey + 10 from (select orderkey + 10, orderkey + 5 as ok from orders limit 1);

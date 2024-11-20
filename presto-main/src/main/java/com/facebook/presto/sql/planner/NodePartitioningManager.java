@@ -15,6 +15,7 @@ package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.common.type.Type;
+import com.facebook.presto.execution.buffer.OutputBuffer;
 import com.facebook.presto.execution.scheduler.BucketNodeMap;
 import com.facebook.presto.execution.scheduler.FixedBucketNodeMap;
 import com.facebook.presto.execution.scheduler.NodeScheduler;
@@ -72,6 +73,11 @@ public class NodePartitioningManager
         this.nodeSelectionStats = requireNonNull(nodeSelectionStats, "nodeSelectionStats is null");
     }
 
+    /**
+     * 这里解决的问题是：
+     * 本fragment的输出，应如何对应到下游fragment的partition上，即如何partition本fragment的输出到{@link OutputBuffer}，
+     * 以便下游的多个任务可以按照预期读取到数据。
+     */
     public PartitionFunction getPartitionFunction(
             Session session,
             PartitioningScheme partitioningScheme,
@@ -121,6 +127,13 @@ public class NodePartitioningManager
         return getNodePartitioningMap(session, partitioningHandle, Optional.empty());
     }
 
+    /**
+     * 这里解决的问题是：
+     * 1. 当前stage应该采用多少个task进行并发处理，即使用多少个partitions
+     * 2. 每个partition应该调度到那个node上运行（决定着每个node读取上游的输出那个output buffer），即partitionToNode
+     * 3. 每个split应该调度到那个node上执行（即{@link NodePartitionMap#asBucketNodeMap()}
+     * 4. 上游stage提供给本stage的数据如何对应到不同的partition，即bucketToPartition
+     */
     public NodePartitionMap getNodePartitioningMap(Session session, PartitioningHandle partitioningHandle, Optional<Predicate<Node>> nodePredicate)
     {
         requireNonNull(session, "session is null");
@@ -182,12 +195,21 @@ public class NodePartitioningManager
     {
         ConnectorBucketNodeMap connectorBucketNodeMap = getConnectorBucketNodeMap(session, partitioningHandle, Optional.empty());
 
+        /**
+         * 可以看到当connector对bucket调度到的node由affinity要求时，则connector的{@link ConnectorNodePartitioningProvider#getBucketNodeMap}
+         * 返回的{@link BucketNodeMap}中必须定义好bucketToNode。
+         */
         NodeSelectionStrategy nodeSelectionStrategy = connectorBucketNodeMap.getNodeSelectionStrategy();
         switch (nodeSelectionStrategy) {
             case HARD_AFFINITY:
+                /**
+                 * 这种情况下，要求connector必须提供bucket和node映射关系，参考；{@link com.facebook.presto.plugin.memory.MemoryNodePartitioningProvider#getBucketNodeMap}
+                 */
                 return new FixedBucketNodeMap(getSplitToBucket(session, partitioningHandle), getFixedMapping(connectorBucketNodeMap), false);
             case SOFT_AFFINITY:
                 if (preferDynamic) {
+                    // 对于这种场景，虽然也会指定bucketToNode，但某个节点上的任务失败后，允许将该结点上的bucket调度到其他节点上。
+                    // 这是DynamicBucketNodeMap的基本特性，即允许失败结点上的bucket重新调度。
                     return new DynamicBucketNodeMap(getSplitToBucket(session, partitioningHandle), connectorBucketNodeMap.getBucketCount(), getFixedMapping(connectorBucketNodeMap));
                 }
                 return new FixedBucketNodeMap(getSplitToBucket(session, partitioningHandle), getFixedMapping(connectorBucketNodeMap), true);

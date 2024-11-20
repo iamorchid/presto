@@ -13,9 +13,13 @@
  */
 package com.facebook.presto.example;
 
+import com.facebook.presto.example.functions.ExampleFunctions;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+
+import java.util.Set;
 
 public class ExamplePlugin
         implements Plugin
@@ -24,5 +28,12 @@ public class ExamplePlugin
     public Iterable<ConnectorFactory> getConnectorFactories()
     {
         return ImmutableList.of(new ExampleConnectorFactory());
+    }
+
+    @Override
+    public Set<Class<?>> getFunctions() {
+        return ImmutableSet.<Class<?>>builder()
+                .add(ExampleFunctions.class)
+                .build();
     }
 }

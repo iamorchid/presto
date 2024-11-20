@@ -243,6 +243,7 @@ public class ClusterMemoryManager
             return;
         }
 
+        // 当集群中某个节点的内存不足时，会设置这个oom flag
         boolean outOfMemory = isClusterOutOfMemory();
         if (!outOfMemory) {
             lastTimeNotOutOfMemory = System.nanoTime();
@@ -289,6 +290,7 @@ public class ClusterMemoryManager
         clusterUserMemoryReservation.set(totalUserMemoryBytes);
         clusterTotalMemoryReservation.set(totalMemoryBytes);
 
+        // 这个条件表示的含义：oom需要持续一段时间（即killOnOutOfMemoryDelay）。
         boolean killOnOomDelayPassed = nanosSince(lastTimeNotOutOfMemory).compareTo(killOnOutOfMemoryDelay) > 0;
         boolean lastKilledQueryGone = isLastKilledQueryGone();
         boolean shouldCallOomKiller = !(lowMemoryKiller instanceof NoneLowMemoryKiller) &&

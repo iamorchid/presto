@@ -79,6 +79,9 @@ public final class SortingProperty<E>
     @Override
     public boolean isSimplifiedBy(LocalProperty<E> known)
     {
+        /**
+         * 参考{@link GroupingProperty#isSimplifiedBy}的具体说明。
+         */
         return known instanceof ConstantProperty || known.equals(this);
     }
 

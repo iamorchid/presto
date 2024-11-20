@@ -26,6 +26,7 @@ import com.facebook.presto.execution.scheduler.nodeSelection.NodeSelector;
 import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
+import com.facebook.presto.spi.plan.PartitioningScheme;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.StageExecutionDescriptor;
 import com.facebook.presto.split.SplitSource;
@@ -101,6 +102,17 @@ public class FixedSourcePartitionedScheduler
 
         checkArgument(splitSources.keySet().equals(ImmutableSet.copyOf(schedulingOrder)));
 
+        /**
+         * 如果stageExecutionDescriptor.isStageGroupedExecution()为false（即没有开启grouped execution），那么
+         * stageExecutionDescriptor.isDynamicLifespanSchedule()肯定也为false，则bucketNodeMap中此时已经定义好了
+         * bucketToNode。
+         * 参考：{@link com.facebook.presto.execution.scheduler.SectionExecutionFactory#createStageScheduler}
+         * 参考：{@link com.facebook.presto.sql.planner.NodePartitioningManager#getBucketNodeMap}
+         *
+         * 否则，在grouped execution开启时，如果bucketNodeMap中没有定义bucketToNode，则bucketNodeMap.isDynamic()
+         * 必定为true，此时LifespanScheduler将选择DynamicLifespanScheduler，它会在调度的时候为没有指定node的bucket
+         * 分配node。
+         */
         BucketedSplitPlacementPolicy splitPlacementPolicy = new BucketedSplitPlacementPolicy(nodeSelector, nodes, bucketNodeMap, stage::getAllTasks);
 
         ArrayList<SourceScheduler> sourceSchedulers = new ArrayList<>();
@@ -129,6 +141,9 @@ public class FixedSourcePartitionedScheduler
                     Math.max(splitBatchSize / concurrentLifespans, 1),
                     groupedExecutionForScanNode);
 
+            /**
+             * [question] 什么查询条件下会发生下面这种情况？？
+             */
             if (stageExecutionDescriptor.isStageGroupedExecution() && !groupedExecutionForScanNode) {
                 sourceScheduler = new AsGroupedSourceScheduler(sourceScheduler);
             }
@@ -180,8 +195,24 @@ public class FixedSourcePartitionedScheduler
         // schedule a task on every node in the distribution
         List<RemoteTask> newTasks = ImmutableList.of();
         if (!scheduledTasks) {
+            /**
+             * 对于和上游stage采用{@link com.facebook.presto.sql.planner.plan.ExchangeNode.Type#REPARTITION}进行交
+             * 互的情况，这里提前用指定的partition调度task非常关键，因为task所对应的partition决定了这个task会从上游stage输出
+             * 读取那个output buffer。否则，{@link SourcePartitionedScheduler}创建任务时，虽然能保证bucketToNode的关系，
+             * 即split调度到哪个节点上执行（结合splitToBucket），但是没法保证node上消费的上游partition满足partitionToNode，
+             * 因为SourcePartitionedScheduler创建任务时，是按照任务的创建顺序分配task ID的（task ID决定任务要从上游消费的
+             * partition）。
+             *
+             * 虽然本stage只关心splitToBucket以及bucketToNode（决定split调度到那个node上），但上游stage关心的则是如何通过
+             * {@link PartitioningScheme#partitioning}和{@link PartitioningScheme#bucketToPartition}将结果输出结果
+             * 投放到特定的output buffer（即具体的partition）。因此，为了能够保证本stage的数据和上游的输出能够正确join，必须
+             * 保证bucketToNode，bucketToPartition以及partitionToNode必须一致。
+             *
+             * 参考{@link com.facebook.presto.sql.planner.NodePartitionMap}字段说明。
+             */
             newTasks = Streams.mapWithIndex(
                     nodes.stream(),
+                    // 这里的id决定了task要从上游读取的output buffer的哪个partition
                     (node, id) -> stage.scheduleTask(node, toIntExact(id)))
                     .filter(Optional::isPresent)
                     .map(Optional::get)
@@ -237,6 +268,7 @@ public class FixedSourcePartitionedScheduler
 
                 ScheduleResult schedule = sourceScheduler.schedule();
                 if (schedule.getSplitsScheduled() > 0) {
+                    // 目前看起来这一步操作没有太大意义，上面进行transitionToFinishedTaskScheduling就已经足够了。
                     stage.transitionToSchedulingSplits();
                 }
                 splitsScheduled += schedule.getSplitsScheduled();
@@ -253,6 +285,8 @@ public class FixedSourcePartitionedScheduler
 
                 if (schedule.isFinished()) {
                     stage.schedulingComplete(sourceScheduler.getPlanNodeId());
+                    // sourceSchedulers采用的是CopyOnWriteArrayList，这里删除不影响iterator操作，
+                    // 即iterator始终看到的是一开始的snapshot。
                     sourceSchedulers.remove(sourceScheduler);
                     sourceScheduler.close();
                     anySourceSchedulingFinished = true;
@@ -317,6 +351,7 @@ public class FixedSourcePartitionedScheduler
         @Override
         public void lockDownNodes()
         {
+            // split调度使用的节点一开始就已经决定了
         }
 
         @Override
@@ -325,8 +360,14 @@ public class FixedSourcePartitionedScheduler
             return activeNodes;
         }
 
+        @Override
         public InternalNode getNodeForBucket(int bucketId)
         {
+            /**
+             * 虽然{@link BucketNodeMap#isDynamic()}可能为true（即一开始bucket对应的node可能没有定义），但调度层会保证在调用
+             * {@link SourceScheduler#startLifespan}之前，先通过{@link BucketNodeMap#assignOrUpdateBucketToNode}来设
+             * 置它们的映射关系，参见{@link DynamicLifespanScheduler#getNextDriverGroup}。
+             */
             return bucketNodeMap.getAssignedNode(bucketId).get();
         }
     }

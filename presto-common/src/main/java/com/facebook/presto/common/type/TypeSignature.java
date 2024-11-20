@@ -185,6 +185,10 @@ public class TypeSignature
     @JsonCreator
     public static TypeSignature parseTypeSignature(String signature)
     {
+        /**
+         * "sls.p1.students:array(student(varchar, int))"       // 支持
+         * "sls.p1.students:array(student<K, V>(varchar, int))" // 不支持
+         */
         return parseTypeSignature(signature, new HashSet<>());
     }
 
@@ -237,6 +241,10 @@ public class TypeSignature
             // TODO: remove angle brackets support once ROW<TYPE>(name) will be dropped
             // Angle brackets here are checked not for the support of ARRAY<> and MAP<>
             // but to correctly parse ARRAY(row<BIGINT, BIGINT>('a','b'))
+            /**
+             * ARRAY(row<BIGINT, BIGINT>('a','b')) 这种形式不支持的, parse时会报错. 其实, 不用
+             * 这么复杂, 采用ARRAY(row(a BIGINT, b BIGINT))即可.
+             */
             if (c == '(' || c == '<') {
                 if (bracketCount == 0) {
                     verify(baseName == null, "Expected baseName to be null");

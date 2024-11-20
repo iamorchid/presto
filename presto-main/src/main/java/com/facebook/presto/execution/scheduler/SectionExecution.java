@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
 public class SectionExecution
 {
     private final StageExecutionAndScheduler rootStage;
-    private final List<StageExecutionAndScheduler> allStages;
+    private final List<StageExecutionAndScheduler> allStages; // 包含rootStage
 
     @GuardedBy("this")
     private volatile boolean aborted;

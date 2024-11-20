@@ -28,6 +28,7 @@ import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
+import java.util.Optional;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static java.lang.String.format;
@@ -55,7 +56,7 @@ public class TestMemoryPagesStore
     public void testCreateEmptyTable()
     {
         createTable(0L, 0L);
-        assertEquals(pagesStore.getPages(0L, 0, 1, ImmutableList.of(0), 0), ImmutableList.of());
+        assertEquals(pagesStore.getPages(0L,0, 0, 1, ImmutableList.of(0), 0), ImmutableList.of());
     }
 
     @Test
@@ -63,28 +64,28 @@ public class TestMemoryPagesStore
     {
         createTable(0L, 0L);
         insertToTable(0L, 0L);
-        assertEquals(pagesStore.getPages(0L, 0, 1, ImmutableList.of(0), POSITIONS_PER_PAGE).size(), 1);
+        assertEquals(pagesStore.getPages(0L, 0, 0, 1, ImmutableList.of(0), POSITIONS_PER_PAGE).size(), 1);
     }
 
     @Test
     public void testInsertPageWithoutCreate()
     {
         insertToTable(0L, 0L);
-        assertEquals(pagesStore.getPages(0L, 0, 1, ImmutableList.of(0), POSITIONS_PER_PAGE).size(), 1);
+        assertEquals(pagesStore.getPages(0L, 0, 0, 1, ImmutableList.of(0), POSITIONS_PER_PAGE).size(), 1);
     }
 
     @Test(expectedExceptions = PrestoException.class)
     public void testReadFromUnknownTable()
     {
-        pagesStore.getPages(0L, 0, 1, ImmutableList.of(0), 0);
+        pagesStore.getPages(0L, 0, 0, 1, ImmutableList.of(0), 0);
     }
 
     @Test(expectedExceptions = PrestoException.class)
     public void testTryToReadFromEmptyTable()
     {
         createTable(0L, 0L);
-        assertEquals(pagesStore.getPages(0L, 0, 1, ImmutableList.of(0), 0), ImmutableList.of());
-        pagesStore.getPages(0L, 0, 1, ImmutableList.of(0), 42);
+        assertEquals(pagesStore.getPages(0L, 0, 0, 1, ImmutableList.of(0), 0), ImmutableList.of());
+        pagesStore.getPages(0L, 0, 0, 1, ImmutableList.of(0), 42);
     }
 
     @Test
@@ -153,7 +154,8 @@ public class TestMemoryPagesStore
                         "schema",
                         format("table_%d", tableId),
                         tableId,
-                        ImmutableList.of()),
+                        ImmutableList.of(),
+                        Optional.empty()),
                 ImmutableSet.copyOf(activeTableIds));
     }
 
@@ -165,7 +167,8 @@ public class TestMemoryPagesStore
                         "schema",
                         format("table_%d", tableId),
                         tableId,
-                        ImmutableList.of()),
+                        ImmutableList.of(),
+                        Optional.empty()),
                 ImmutableSet.copyOf(activeTableIds));
     }
 

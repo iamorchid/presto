@@ -73,7 +73,7 @@ public class LocalExchangeSinkOperator
         {
             if (!closed) {
                 closed = true;
-                localExchangeFactory.closeSinks(sinkFactoryId);
+                localExchangeFactory.closeSinkFactory(sinkFactoryId);
             }
         }
 

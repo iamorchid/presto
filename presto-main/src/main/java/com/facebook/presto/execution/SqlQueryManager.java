@@ -126,6 +126,11 @@ public class SqlQueryManager
         this.queryManagementExecutor = Executors.newScheduledThreadPool(queryManagerConfig.getQueryManagerExecutorPoolSize(), threadsNamed("query-management-%s"));
         this.queryManagementExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) queryManagementExecutor);
 
+        /**
+         * {@link com.facebook.presto.dispatcher.DispatchManager#queryTracker}用于跟踪
+         * {@link com.facebook.presto.dispatcher.DispatchQuery}，而此处的queryTracker则
+         * 用于跟踪{@link SqlQueryExecution}。
+         */
         this.queryTracker = new QueryTracker<>(queryManagerConfig, queryManagementExecutor, clusterQueryTrackerService);
         requireNonNull(historyBasedPlanStatisticsManager, "historyBasedPlanStatisticsManager is null");
         this.historyBasedPlanStatisticsTracker = historyBasedPlanStatisticsManager.getHistoryBasedPlanStatisticsTracker();

@@ -49,6 +49,10 @@ public class LocalExchangeSink
     {
         if (finished.compareAndSet(false, true)) {
             exchanger.finish();
+
+            /**
+             * onFinish通常对应{@link LocalExchange#sinkFinished(LocalExchangeSink)}
+             */
             onFinish.accept(this);
         }
     }

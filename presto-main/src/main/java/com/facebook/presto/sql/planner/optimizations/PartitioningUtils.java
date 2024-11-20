@@ -180,6 +180,10 @@ public class PartitioningUtils
     public static boolean isPartitionedOn(Partitioning partitioning, Collection<VariableReferenceExpression> columns, Set<VariableReferenceExpression> knownConstants)
     {
         for (RowExpression argument : partitioning.getArguments()) {
+            /**
+             * 这里的含义是：如果输出结果能够保证能够按照 (k_1, k_2, ..., k_n) 划分的，即不同node（或者不同split）的输出结果
+             * 不会在这几个纬度上有交集，那么是否也能进行(k_1, k_2, ..., k_n, k_n+1, ...)纬度的划分？答案是显然的。
+             */
             // partitioned on (k_1, k_2, ..., k_n) => partitioned on (k_1, k_2, ..., k_n, k_n+1, ...)
             // can safely ignore all constant columns when comparing partition properties
             if (argument instanceof ConstantExpression) {

@@ -34,8 +34,13 @@ public class NodeSchedulerConfig
     private int minCandidates = 10;
     private boolean includeCoordinator = true;
     private int maxSplitsPerNode = 100;
+
+    /**
+     * TODO 下面的配置有些问题，从当前的实现来看，pending splits是包含unacknowledged splits的。
+     */
     private int maxPendingSplitsPerTask = 10;
     private int maxUnacknowledgedSplitsPerTask = 500;
+
     private String networkTopology = NetworkTopologyType.LEGACY;
     private NodeSelectionHashStrategy nodeSelectionHashStrategy = NodeSelectionHashStrategy.MODULAR_HASHING;
     private int minVirtualNodeCount = 1000;

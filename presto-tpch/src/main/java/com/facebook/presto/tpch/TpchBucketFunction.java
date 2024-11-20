@@ -16,6 +16,7 @@ package com.facebook.presto.tpch;
 import com.facebook.presto.common.Page;
 import com.facebook.presto.common.block.Block;
 import com.facebook.presto.spi.BucketFunction;
+import io.airlift.tpch.*;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -43,6 +44,12 @@ public class TpchBucketFunction
 
         long orderKey = BIGINT.getLong(block, position);
         long rowNumber = rowNumberFromOrderKey(orderKey);
+
+        /**
+         * 这里的{@link #rowsPerBucket}针对的是{@link TpchTable#ORDERS}。对于{@link TpchTable#LINE_ITEM}
+         * 而言，因为一个order会对应多个lineitem，因此{@link TpchTable#LINE_ITEM}的bucket中包含的rows肯定是
+         * 多余这里的{@link #rowsPerBucket}的。
+         */
         int bucket = toIntExact(rowNumber / rowsPerBucket);
 
         // due to rounding, the last bucket has extra rows
@@ -61,6 +68,10 @@ public class TpchBucketFunction
                 .toString();
     }
 
+    /**
+     * {@link OrderGenerator#makeOrderKey}的逆运算，计算对应order的row number（它是从1开始, 计算bucket时,
+     * 需要转成从0开始的序号）。基于order的行号，可以快速计算出order或者lineitem所属的bucket。
+     */
     private static long rowNumberFromOrderKey(long orderKey)
     {
         // remove bits 3 and 4

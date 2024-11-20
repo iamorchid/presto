@@ -287,7 +287,7 @@ public final class PartitionedLookupSourceFactory
                 this.lookupSourceSupplier = TrackingLookupSourceSupplier.nonTracking(partitions[0]);
             }
 
-            // store futures into local variables so they can be used outside of the lock
+            // store futures into local variables so they can be used outside the lock
             lookupSourceFutures = ImmutableList.copyOf(this.lookupSourceFutures);
         }
         finally {
