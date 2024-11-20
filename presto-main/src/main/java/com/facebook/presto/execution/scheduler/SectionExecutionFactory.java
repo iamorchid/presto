@@ -66,6 +66,8 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import com.facebook.presto.spi.ConnectorTablePartitioning;
+
 import static com.facebook.presto.SystemSessionProperties.getConcurrentLifespansPerNode;
 import static com.facebook.presto.SystemSessionProperties.getMaxTasksPerStage;
 import static com.facebook.presto.SystemSessionProperties.getWriterMinSize;
@@ -197,6 +199,10 @@ public class SectionExecutionFactory
             Session session,
             ExchangeLocationsConsumer parent,
             StreamingSubPlan plan,
+            /**
+             * 这里采用cache是为了保证多次通过PartitioningHandle获取NodePartitionMap时，得到的bucketToNode，
+             * bucketToPartition以及partitionToNode是稳定的。
+             */
             Function<PartitioningHandle, NodePartitionMap> partitioningCache,
             TableWriteInfo tableWriteInfo,
             Optional<SqlStageExecution> parentStageExecution,
@@ -221,8 +227,27 @@ public class SectionExecutionFactory
                 schedulerStats,
                 tableWriteInfo);
 
+        /**
+         * a) TableScan
+         * SubPlan使用的{@link PartitioningHandle}参考{@link BasePlanFragmenter#visitTableScan}。
+         *
+         * b) 有上游依赖的SubPlan
+         * SubPlan使用的{@link PartitioningHandle}参考{@link BasePlanFragmenter#visitExchange}。
+         *
+         * 通过{@link BasePlanFragmenter#createRemoteStreamingExchange}知道，下游SubPlan使用的{@link PartitioningHandle}
+         * 和上游的SubPlan使用的{@link PartitioningScheme#partitioning}是保持一致的（其中PartitioningScheme的创建，可以参考
+         * {@link com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#visitAggregation}）。
+         */
         PartitioningHandle partitioningHandle = plan.getFragment().getPartitioning();
         List<RemoteSourceNode> remoteSourceNodes = plan.getFragment().getRemoteSourceNodes();
+
+        /**
+         * bucketToPartition用于告知上游stage如何将输出结果对应到不通的partition中，这个会设置到上游stage中的
+         * {@link PartitioningScheme#bucketToPartition}。而下游stage，通常会为每个partition创建一个对应的
+         * 消费task。
+         *
+         * 另外，参见{@link StageLinkage#StageLinkage}关于上游stage创建{@link OutputBufferManager}。
+         */
         Optional<int[]> bucketToPartition = getBucketToPartition(partitioningHandle, partitioningCache, plan.getFragment().getRoot(), remoteSourceNodes);
 
         // create child stages
@@ -329,6 +354,13 @@ public class SectionExecutionFactory
             if (!splitSources.isEmpty()) {
                 // contains local source
                 List<PlanNodeId> schedulingOrder = plan.getFragment().getTableScanSchedulingOrder();
+                /**
+                 * 通过{@link SystemPartitioningHandle#createSystemPartitioning}可以知道，SystemPartitioningHandle的connectorId
+                 * 是为空的，即走到这里要求partitioningHandle不能为SystemPartitioningHandle。换句话说，source connector一定自定义了
+                 * {@link ConnectorTablePartitioning}，否则根据{@link BasePlanFragmenter#visitTableScan}中的逻辑可以知道，当connector
+                 * 没有自定义ConnectorTablePartitioning，此时SubPlan的PartitioningHandle应该为SOURCE_DISTRIBUTION，则逻辑应该走到
+                 * 第一个if分支。
+                 */
                 ConnectorId connectorId = partitioningHandle.getConnectorId().orElseThrow(IllegalStateException::new);
                 List<ConnectorPartitionHandle> connectorPartitionHandles;
                 boolean groupedExecutionForStage = plan.getFragment().getStageExecutionDescriptor().isStageGroupedExecution();
@@ -340,13 +372,42 @@ public class SectionExecutionFactory
                     connectorPartitionHandles = ImmutableList.of(NOT_PARTITIONED);
                 }
 
+                /**
+                 * 由{@link NodePartitioningManager#getBucketNodeMap}和{@link NodePartitioningManager#getNodePartitioningMap}
+                 * 知道，当partitioningHandle不为SystemPartitioningHandle时，{@link BucketNodeMap#splitToBucket}总是有意义的。
+                 */
                 BucketNodeMap bucketNodeMap;
                 List<InternalNode> stageNodeList;
                 if (plan.getFragment().getRemoteSourceNodes().stream().allMatch(node -> node.getExchangeType() == REPLICATE)) {
                     // no non-replicated remote source
                     boolean dynamicLifespanSchedule = plan.getFragment().getStageExecutionDescriptor().isDynamicLifespanSchedule();
+
+                    /**
+                     * REPLICATE下，上游stage不用关心bucketToPartition（因为所有partition对应的output buffer内容一样）以及本stage不
+                     * 用关心partitionToNode（即本stage任务调度到的node 消费 上游stage的哪个output buffer）。这里会确定bucket的数量和
+                     * splitToBucket，以及可能确定bucketToNode（即确定每个split调度到那个node上），具体取决于dynamicLifespanSchedule
+                     * 是否为true以及使用的NodeSelectionStrategy。
+                     *
+                     * 另外，针对{@link BucketNodeMap#isDynamic()}为true的情况，split并不需要绑定到特定的node上执行。失败重试时，它还可
+                     * 以迁移到其他其他node上进行执行。
+                     */
+                    /**
+                     * 当GROUPED EXECUTION开启时，dynamicLifespanSchedule将为true，此时返回的BucketNodeMap可能没有bucketToNode
+                     * 信息（即NodeSelectionStrategy采用NO_PREFERENCE）。后面调度split时，将由DynamicLifespanScheduler为bucket
+                     * 分配对应的node。
+                     */
                     bucketNodeMap = nodePartitioningManager.getBucketNodeMap(session, partitioningHandle, dynamicLifespanSchedule);
 
+                    /**
+                     * 这里有个疑问：要采用dynamic {@link BucketNodeMap}，除了限制和上游stage的shuffle方式为REPLICATE以及connector
+                     * 使用的NodeSelectionStrategy为NO_PREFERENCE外，为何还有限定开启GROUPED EXECUTION？不开启GROUPED EXECUTION不
+                     * 能使用dynamic {@link BucketNodeMap}？
+                     *
+                     * 个人理解，限定GROUPED EXECUTION开启是不必要的。但GROUPED EXECUTION不开启的情况下，使用dynamic BucketNodeMap没
+                     * 有太大意义，因为要调度的split所属的bucket不受框架控制，connector很可能在split调度时一次性创建出所有的split。而对于
+                     * GROUPED EXECUTION开启的情况下则比较有用，因为可以将pending group（也即bucket）尽可能调度到最快完成已有group计算
+                     * 的节点上。
+                     */
                     // verify execution is consistent with planner's decision on dynamic lifespan schedule
                     verify(bucketNodeMap.isDynamic() == dynamicLifespanSchedule);
 
@@ -360,13 +421,27 @@ public class SectionExecutionFactory
                     }
                 }
                 else {
+                    /**
+                     * 这里的限制可以参考{@link com.facebook.presto.sql.planner.PlanFragmenterUtils#analyzeGroupedExecution}，
+                     * 即存在 非REPLICATE 的 {@link RemoteSourceNode}时，StageExecutionStrategy只可能是 UNGROUPED_EXECUTION
+                     * 或者 FIXED_LIFESPAN_SCHEDULE_GROUPED_EXECUTION。
+                     */
                     // cannot use dynamic lifespan schedule
                     verify(!plan.getFragment().getStageExecutionDescriptor().isDynamicLifespanSchedule(),
                             "Stage was planned with DYNAMIC_LIFESPAN_SCHEDULE_GROUPED_EXECUTION, but is not eligible.");
 
+                    /**
+                     * 此时bucketToNode以及partitionToNode都需要确定，其实在{@link #createStreamingLinkedStageExecutions}中调用
+                     * {@link #getBucketToPartition}就已经确定好了NodePartitionMap。因为需要保证上游stage看到的bucketToPartition
+                     * 同本stage使用的bucketToNode以及partitionToNode的一致性，这里使用了cache来确保多次resolve出来的NodePartitionMap
+                     * 是相同的。
+                     */
                     // Partitioned remote source requires nodePartitionMap
                     NodePartitionMap nodePartitionMap = partitioningCache.apply(plan.getFragment().getPartitioning());
                     if (groupedExecutionForStage) {
+                        /**
+                         * [question] 思考下为啥remote source全是REPLICATE的情况下，没有这个限制，而此处却有？
+                         */
                         checkState(connectorPartitionHandles.size() == nodePartitionMap.getBucketToPartition().length);
                     }
                     stageNodeList = nodePartitionMap.getPartitionToNode();

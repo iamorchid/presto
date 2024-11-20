@@ -37,6 +37,15 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 
+/**
+ * 这里的stream属性是某个operator node输出特征的。operator node参与的pipeline可以有多个Driver实例，其中
+ * 每个Driver处理独立的一个stream，而pipeline实例的个数又是由源头operator决定的（比如local ExchangeNode，
+ * RemoteSourceNode，TableScanNode）。
+ *
+ * distribution：operator node需要输出单个stream还是多个stream？
+ * partitioningColumns：输出多个stream时，数据按照什么partitioning方式将数据写到不同的stream中？
+ * orderSensitive：输出是否对排序敏感，即上游节点输出是ordered，本节点是否需要保序输出？
+ */
 public class StreamPreferredProperties
 {
     private final Optional<StreamDistribution> distribution;
@@ -44,6 +53,12 @@ public class StreamPreferredProperties
     private final boolean exactColumnOrder;
     private final Optional<List<VariableReferenceExpression>> partitioningColumns; // if missing => any partitioning scheme is acceptable
 
+    /**
+     * 该字段表示的含义是：如果上游节点的结果是ordered（参见{@link StreamProperties#isOrdered()}），则忽略{@link #distribution}
+     * 和{@link #partitioningColumns}的要求，总是认为上游节点的结果满足{@link #isSatisfiedBy}。
+     *
+     * 注意：{@link StreamProperties#isOrdered()}为true，必定满足{@link StreamProperties#distribution}为SINGLE。
+     */
     private final boolean orderSensitive;
 
     private StreamPreferredProperties(Optional<StreamDistribution> distribution, Optional<? extends Iterable<VariableReferenceExpression>> partitioningColumns, boolean orderSensitive)
@@ -80,6 +95,10 @@ public class StreamPreferredProperties
         return new StreamPreferredProperties(Optional.of(FIXED), Optional.empty(), false);
     }
 
+    /**
+     * 对于如下SQL, 是否开启prefer_streaming_operators对执行计划影响较大, 可以参考分析: sql-examples/sqls-aggregation-filter
+     * select orderpriority, count(distinct(clerk)), count(distinct(clerk)) filter (where orderkey < 100) from orders group by grouping sets ( (), (orderpriority));
+     */
     public static StreamPreferredProperties defaultParallelism(Session session)
     {
         if (getTaskConcurrency(session) > 1 && !preferStreamingOperators(session)) {
@@ -147,6 +166,10 @@ public class StreamPreferredProperties
         return new StreamPreferredProperties(distribution, Optional.of(desiredPartitioning), false);
     }
 
+    /**
+     * 对于如下SQL, 是否开启prefer_streaming_operators对执行计划影响较大, 可以参考分析: sql-examples/sqls-aggregation-filter
+     * select orderpriority, count(distinct(clerk)), count(distinct(clerk)) filter (where orderkey < 100) from orders group by grouping sets ( (), (orderpriority));
+     */
     public StreamPreferredProperties withDefaultParallelism(Session session)
     {
         if (getTaskConcurrency(session) > 1 && !preferStreamingOperators(session)) {

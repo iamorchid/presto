@@ -55,18 +55,20 @@ public class RunLengthEncodedBlock
         if (value.getPositionCount() != 1) {
             throw new IllegalArgumentException(format("Expected value to contain a single position but has %s positions", value.getPositionCount()));
         }
+        if (positionCount < 0) {
+            throw new IllegalArgumentException("positionCount is negative");
+        }
 
         if (value instanceof RunLengthEncodedBlock) {
+            /**
+             * 这里的value还有可能是RunLengthEncodedBlock吗？不可能了, 因为这里的构造函数保证
+             * 了{@link RunLengthEncodedBlock#value}不可能是RunLengthEncodedBlock.
+             */
             this.value = ((RunLengthEncodedBlock) value).getValue();
         }
         else {
             this.value = value;
         }
-
-        if (positionCount < 0) {
-            throw new IllegalArgumentException("positionCount is negative");
-        }
-
         this.positionCount = positionCount;
     }
 

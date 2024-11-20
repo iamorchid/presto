@@ -45,6 +45,9 @@ public class StageExecutionDescriptor
             case FIXED_LIFESPAN_SCHEDULE_GROUPED_EXECUTION:
             case DYNAMIC_LIFESPAN_SCHEDULE_GROUPED_EXECUTION:
             case RECOVERABLE_GROUPED_EXECUTION:
+                /**
+                 * 这种情况下，是允许ungrouped execution scan nodes的，参考{@link com.facebook.presto.execution.SqlTaskExecution#scheduleTableScanSource}注解。
+                 */
                 checkArgument(!groupedExecutionScanNodes.isEmpty(), "groupedExecutionScanNodes cannot be empty if stage execution strategy is grouped execution");
                 break;
             default:

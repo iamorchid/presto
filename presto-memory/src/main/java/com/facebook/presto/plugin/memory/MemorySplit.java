@@ -33,6 +33,7 @@ public class MemorySplit
 {
     private final MemoryTableHandle tableHandle;
     private final int totalPartsPerWorker; // how many concurrent reads there will be from one worker
+    private final int bucket; // table bucket
     private final int partNumber; // part of the pages on one worker that this splits is responsible
     private final HostAddress address;
     private final long expectedRows;
@@ -40,6 +41,7 @@ public class MemorySplit
     @JsonCreator
     public MemorySplit(
             @JsonProperty("tableHandle") MemoryTableHandle tableHandle,
+            @JsonProperty("bucket") int bucket,
             @JsonProperty("partNumber") int partNumber,
             @JsonProperty("totalPartsPerWorker") int totalPartsPerWorker,
             @JsonProperty("address") HostAddress address,
@@ -47,9 +49,11 @@ public class MemorySplit
     {
         checkState(partNumber >= 0, "partNumber must be >= 0");
         checkState(totalPartsPerWorker >= 1, "totalPartsPerWorker must be >= 1");
+        checkState(tableHandle.getBucketProperty().isPresent() || bucket == 0, "bucket should always be 0 if bucketing is not enabled");
         checkState(totalPartsPerWorker > partNumber, "totalPartsPerWorker must be > partNumber");
 
         this.tableHandle = requireNonNull(tableHandle, "tableHandle is null");
+        this.bucket = bucket;
         this.partNumber = partNumber;
         this.totalPartsPerWorker = totalPartsPerWorker;
         this.address = requireNonNull(address, "address is null");
@@ -66,6 +70,12 @@ public class MemorySplit
     public int getTotalPartsPerWorker()
     {
         return totalPartsPerWorker;
+    }
+
+    @JsonProperty
+    public int getBucket()
+    {
+        return bucket;
     }
 
     @JsonProperty

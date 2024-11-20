@@ -40,6 +40,23 @@ import static org.testng.Assert.fail;
 public class TestTypeSignature
 {
     @Test
+    public void testParseTypeSignature()
+    {
+        TypeSignature ts1 = TypeSignature.parseTypeSignature("ARRAY(row(col1 BIGINT, col2 sls.p1.long:BIGINT, varchar))");
+        System.out.println(ts1);
+        TypeSignature ts2 = TypeSignature.parseTypeSignature("sls.p1.array:array(tinyint)");
+        System.out.println(ts2);
+        TypeSignature ts3 = TypeSignature.parseTypeSignature("sls.p1.student");
+        System.out.println(ts3);
+        TypeSignature ts4 = TypeSignature.parseTypeSignature("sls.p1.student:student(varchar, int)");
+        System.out.println(ts4);
+        TypeSignature ts5 = TypeSignature.parseTypeSignature("sls.p1.students:array(student(varchar, int))");
+        System.out.println(ts5);
+        TypeSignature ts6 = TypeSignature.parseTypeSignature("varchar(20)");
+        System.out.println(ts6);
+    }
+
+    @Test
     public void parseSignatureWithLiterals()
     {
         TypeSignature result = parseTypeSignature("decimal(X,42)", ImmutableSet.of("X"));

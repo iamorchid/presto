@@ -709,6 +709,10 @@ public class SqlQueryScheduler
     // Only used for adaptive optimization, to register listeners to new stageExecutions generated in runtime.
     private void addStateChangeListeners(SectionExecution sectionExecution)
     {
+        /**
+         * 当queryStateMachine的状态变为done后，会触发整个query的cancel，进而执行{@link #abort()}来终止所有的stage。
+         * 触发时机参考：{@link com.facebook.presto.execution.SqlQueryExecution#SqlQueryExecution}
+         */
         for (StageExecutionAndScheduler stageExecutionAndScheduler : sectionExecution.getSectionStages()) {
             SqlStageExecution stageExecution = stageExecutionAndScheduler.getStageExecution();
             if (isRootFragment(stageExecution.getFragment())) {
@@ -722,6 +726,11 @@ public class SqlQueryScheduler
                     }
                 });
             }
+
+            /**
+             * 当某个stage被cancel后（即执行{@link #cancelStage(StageId)}）,对整个query没有影响，可以认为是
+             * stage的执行提前结束了（尽管stage的状态还是{@link StageExecutionState#CANCELED}）。
+             */
             stageExecution.addStateChangeListener(state -> {
                 if (queryStateMachine.isDone()) {
                     return;

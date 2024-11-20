@@ -21,8 +21,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 
@@ -34,6 +36,7 @@ public final class MemoryTableHandle
     private final String tableName;
     private final Long tableId;
     private final List<MemoryColumnHandle> columnHandles;
+    private final Optional<MemoryBucketProperty> bucketProperty;
 
     public MemoryTableHandle(
             String connectorId,
@@ -44,7 +47,8 @@ public final class MemoryTableHandle
                 tableMetadata.getTable().getSchemaName(),
                 tableMetadata.getTable().getTableName(),
                 tableId,
-                MemoryColumnHandle.extractColumnHandles(tableMetadata.getColumns()));
+                MemoryColumnHandle.extractColumnHandles(tableMetadata.getColumns()),
+                MemoryBucketProperty.create(tableMetadata.getProperties()));
     }
 
     @JsonCreator
@@ -53,13 +57,21 @@ public final class MemoryTableHandle
             @JsonProperty("schemaName") String schemaName,
             @JsonProperty("tableName") String tableName,
             @JsonProperty("tableId") Long tableId,
-            @JsonProperty("columnHandles") List<MemoryColumnHandle> columnHandles)
+            @JsonProperty("columnHandles") List<MemoryColumnHandle> columnHandles,
+            @JsonProperty("bucketProperty") Optional<MemoryBucketProperty> bucketProperty)
     {
+        if (bucketProperty.isPresent()) {
+            bucketProperty.get().getBucketedBy().forEach(column -> {
+                checkArgument(columnHandles.stream().anyMatch(c -> c.getName().equals(column)),
+                        "invalid bucketed-by column: " + column);
+            });
+        }
         this.connectorId = requireNonNull(connectorId, "connectorId is null");
         this.schemaName = requireNonNull(schemaName, "schemaName is null");
         this.tableName = requireNonNull(tableName, "tableName is null");
         this.tableId = requireNonNull(tableId, "tableId is null");
         this.columnHandles = requireNonNull(columnHandles, "columnHandles is null");
+        this.bucketProperty = requireNonNull(bucketProperty, "bucketProperty is null");
     }
 
     @JsonProperty
@@ -90,6 +102,12 @@ public final class MemoryTableHandle
     public List<MemoryColumnHandle> getColumnHandles()
     {
         return columnHandles;
+    }
+
+    @JsonProperty
+    public Optional<MemoryBucketProperty> getBucketProperty()
+    {
+        return bucketProperty;
     }
 
     public ConnectorTableMetadata toTableMetadata()

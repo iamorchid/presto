@@ -570,13 +570,20 @@ public class HashGenerationOptimizer
             }
 
             // establish fixed ordering for hash variables
+            /**
+             * 对于下面的HashComputation，他们计算HASH所使用的fields（即{@link HashComputation#fields}) 都来自
+             * {@link ExchangeNode#getOutputVariables()}，即{@link PartitioningScheme#outputLayout}。
+             */
             List<HashComputation> hashVariableOrder = ImmutableList.copyOf(preference.getHashes());
             Map<HashComputation, VariableReferenceExpression> newHashVariables = new HashMap<>();
             for (HashComputation preferredHashVariable : hashVariableOrder) {
                 newHashVariables.put(preferredHashVariable, variableAllocator.newHashVariable());
             }
 
-            // rewrite partition function to include new variables (and precomputed hash
+            // rewrite partition function to include new variables (and precomputed hash)
+            /**
+             * PartitioningScheme的新output会由下面的requiredHashComputations来保证。
+             */
             partitioningScheme = new PartitioningScheme(
                     partitioningScheme.getPartitioning(),
                     ImmutableList.<VariableReferenceExpression>builder()
@@ -585,7 +592,7 @@ public class HashGenerationOptimizer
                                     .map(newHashVariables::get)
                                     .collect(toImmutableList()))
                             .build(),
-                    partitionVariables.map(newHashVariables::get),
+                    partitionVariables.map(newHashVariables::get), // hashColumn
                     partitioningScheme.isReplicateNullsAndAny(),
                     partitioningScheme.getEncoding(),
                     partitioningScheme.getBucketToPartition());
@@ -597,21 +604,32 @@ public class HashGenerationOptimizer
                 PlanNode source = node.getSources().get(sourceId);
                 List<VariableReferenceExpression> inputVariables = node.getInputs().get(sourceId);
 
+                /**
+                 * 对于ExchangeNode而言，其不同的source的输出，可以采用不同的{@link VariableReferenceExpression}，但
+                 * 输出列表的字段数量和类型肯定是一致的，且和{@link PartitioningScheme#outputLayout}一一对应。
+                 */
                 Map<VariableReferenceExpression, VariableReferenceExpression> outputToInputMap = new HashMap<>();
                 for (int variableId = 0; variableId < inputVariables.size(); variableId++) {
                     outputToInputMap.put(node.getOutputVariables().get(variableId), inputVariables.get(variableId));
                 }
                 Function<VariableReferenceExpression, Optional<VariableReferenceExpression>> outputToInputTranslator = variable -> Optional.of(outputToInputMap.get(variable));
 
-                HashComputationSet sourceContext = preference.translate(outputToInputTranslator);
-                PlanWithProperties child = planAndEnforce(source, sourceContext, true, sourceContext);
+                /**
+                 * 可以看到，Exchange节点以及它下游节点（即parent node）所依赖的HASH预计算，都会转交给ExchangeNode的
+                 * 上游节点（即child node）来完成，因为planAndEnforce中指定了requiredHashes。
+                 *
+                 * 另外，这里的translate操作是将HashComputation中使用的ExchangeNode输出字段，映射为上游节点的输出字段。
+                 */
+                HashComputationSet requiredHashComputations = preference.translate(outputToInputTranslator);
+                PlanWithProperties child = planAndEnforce(source, requiredHashComputations, true, requiredHashComputations);
                 newSources.add(child.getNode());
 
                 // add hash variables to inputs in the required order
                 ImmutableList.Builder<VariableReferenceExpression> newInputVariables = ImmutableList.builder();
                 newInputVariables.addAll(inputVariables);
-                for (HashComputation preferredHashSymbol : hashVariableOrder) {
-                    HashComputation hashComputation = preferredHashSymbol.translate(outputToInputTranslator).get();
+                for (HashComputation requiredHashComputation : hashVariableOrder) {
+                    // TODO 这里的{@link Optional#get} 是否安全 ？？？
+                    HashComputation hashComputation = requiredHashComputation.translate(outputToInputTranslator).get();
                     newInputVariables.add(child.getRequiredHashVariable(hashComputation));
                 }
 
@@ -759,7 +777,7 @@ public class HashGenerationOptimizer
                 return new PlanWithProperties(node, ImmutableMap.of());
             }
 
-            // There is not requirement to produce hash variables and only preference for variables
+            // There is no requirement to produce hash variables and only preference for variables
             PlanWithProperties source = planAndEnforce(Iterables.getOnlyElement(node.getSources()), new HashComputationSet(), alwaysPruneExtraHashVariables, preferredHashes);
             PlanNode result = replaceChildren(node, ImmutableList.of(source.getNode()));
 
@@ -799,6 +817,9 @@ public class HashGenerationOptimizer
                 return result;
             }
 
+            /**
+             * 上游节点无法提供要求的HASH预计算，这里会通过projection来实现下游节点的要求。
+             */
             return enforce(result, requiredHashes);
         }
 
@@ -831,7 +852,13 @@ public class HashGenerationOptimizer
                 }
             }
 
-            ProjectNode projectNode = new ProjectNode(planWithProperties.node.getSourceLocation(), idAllocator.getNextId(), planWithProperties.node.getStatsEquivalentPlanNode(), planWithProperties.getNode(), assignments.build(), LOCAL);
+            ProjectNode projectNode = new ProjectNode(
+                    planWithProperties.node.getSourceLocation(),
+                    idAllocator.getNextId(),
+                    planWithProperties.node.getStatsEquivalentPlanNode(),
+                    planWithProperties.getNode(),
+                    assignments.build(),
+                    LOCAL);
             return new PlanWithProperties(projectNode, outputHashVariables);
         }
 

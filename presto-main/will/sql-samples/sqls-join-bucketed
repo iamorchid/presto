@@ -1,0 +1,239 @@
+//
+// 一般的我们希望较小的表作为build side(当使用JOIN时Presto默认将左边的表作为probe side, 将JOIN右侧的表作为build side), 
+// 因为作为build Side的表会被读取并在内存中构建HASH Table, 因此我们希望这个表是较小的那个表。
+//
+// 当optimizer.join-reordering-strategy不为NONE时（默认不为NONE），presto会根据cost自动调整left和right table的顺序。
+//
+// 另外, index join相关的plan逻辑，请参考：com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#vistJoin
+//
+
+select l.orderkey, o.orderdate from orders as o, lineitem as l where o.orderkey = l.orderkey;
+
+说明：
+a) colocated_join也是默认开启的
+b) disable_orders_partitioning和disable_lineitem_partitioning 默认为false
+
+1) 
+SET SESSION join_distribution_type = 'PARTITIONED';
+SET SESSION grouped_execution = false;
+SET SESSION tpch.disable_lineitem_partitioning = true;
+
+                                                                                                           Query Plan                                                                                                           
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, orderdate] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                           
+         Estimates: {rows: 60175 (822.71kB), cpu: 5878475.00, memory: 345000.00, network: 1925600.00}                                                                                                                           
+         orderkey := orderkey_0 (1:16)                                                                                                                                                                                          
+     - RemoteStreamingExchange[GATHER] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                   
+             Estimates: {rows: 60175 (822.71kB), cpu: 5878475.00, memory: 345000.00, network: 1925600.00}                                                                                                                       
+         /*** 这里采用了bucketed join （即右表按照partitioning分桶），另外注意：左表和右表的顺序发生了变化 ***/
+         - InnerJoin[("orderkey_0" = "orderkey")][$hashvalue, $hashvalue_11] => [orderkey_0:bigint, orderdate:date]                                                                                                             
+                 Estimates: {rows: 60175 (822.71kB), cpu: 5878475.00, memory: 345000.00, network: 1083150.00}                                                                                                                   
+                 Distribution: PARTITIONED                                                                                                                                                                                      
+             /*** lineitem关闭table partitioning后，这里引入了remote ExchangeNode ***/ 
+             - RemoteStreamingExchange[REPARTITION] => [orderkey_0:bigint, $hashvalue:bigint]                                                                                                                                   
+                     Estimates: {rows: 60175 (822.71kB), cpu: 2707875.00, memory: 0.00, network: 1083150.00}                                                                                                                    
+                 - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, projectLocality = LOCAL] => [orderkey_0:bigint, $hashvalue_10:bigint]           
+                         Estimates: {rows: 60175 (822.71kB), cpu: 541575.00, memory: 0.00, network: 0.00}/{rows: 60175 (822.71kB), cpu: 1624725.00, memory: 0.00, network: 0.00}                                                
+                         $hashvalue_10 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:58)                                                                                                  
+                         orderkey_0 := tpch:orderkey (1:58)                                                                                                                                                                     
+             - LocalExchange[HASH][$hashvalue_11] (orderkey) => [orderkey:bigint, orderdate:date, $hashvalue_11:bigint]                                                                                                         
+                     Estimates: {rows: 15000 (205.08kB), cpu: 900000.00, memory: 0.00, network: 0.00}                                                                                                                           
+                 /*** TableScanNode对应的StreamPreferredProperties#distribution为MULTILE，而 join 要求build必须为 FIXED且exactly按照join列partitioned 或者 SINGLE ***/
+                 - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, $hashvalue_12:bigint] 
+                         Estimates: {rows: 15000 (205.08kB), cpu: 210000.00, memory: 0.00, network: 0.00}/{rows: 15000 (205.08kB), cpu: 555000.00, memory: 0.00, network: 0.00}                                                 
+                         $hashvalue_12 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:45)                                                                                                    
+                         orderkey := tpch:orderkey (1:45)                                                                                                                                                                       
+                         orderdate := tpch:orderdate (1:45)                                                                                                                                                                     
+                         tpch:orderstatus                                                                                                                                                                                       
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                           
+                                                                                                                                                                                                                                
+(1 row)
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                         
+     Output layout: [orderkey_0, orderdate]                                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                                          
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                           
+     - Output[orderkey, orderdate] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                                    
+             Estimates: {source: CostBasedSourceInfo, rows: 60175 (822.71kB), cpu: 5878475.00, memory: 345000.00, network: 1925600.00}                                                                                                       
+             orderkey := orderkey_0 (1:35)                                                                                                                                                                                                   
+         - RemoteSource[1] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                                            
+                                                                                                                                                                                                                                             
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                              
+     Output layout: [orderkey_0, orderdate]                                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                                          
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                           
+     - InnerJoin[("orderkey_0" = "orderkey")][$hashvalue, $hashvalue_11] => [orderkey_0:bigint, orderdate:date]                                                                                                                              
+             Estimates: {source: CostBasedSourceInfo, rows: 60175 (822.71kB), cpu: 5878475.00, memory: 345000.00, network: 1083150.00}                                                                                                       
+             Distribution: PARTITIONED                                                                                                                                                                                                       
+         - RemoteSource[2] => [orderkey_0:bigint, $hashvalue:bigint]                                                                                                                                                                         
+         - LocalExchange[HASH][$hashvalue_11] (orderkey) => [orderkey:bigint, orderdate:date, $hashvalue_11:bigint]                                                                                                                          
+                 Estimates: {source: CostBasedSourceInfo, rows: 15000 (205.08kB), cpu: 900000.00, memory: 0.00, network: 0.00}                                                                                                               
+             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, $hashvalue_12:bigint] 
+                     Estimates: {source: CostBasedSourceInfo, rows: 15000 (205.08kB), cpu: 210000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 15000 (205.08kB), cpu: 555000.00, memory: 0.00, network: 0.00}        
+                     $hashvalue_12 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:64)                                                                                                                     
+                     orderdate := tpch:orderdate (1:64)                                                                                                                                                                                      
+                     orderkey := tpch:orderkey (1:64)                                                                                                                                                                                        
+                     tpch:orderstatus                                                                                                                                                                                                        
+                         :: [["F"], ["O"], ["P"]]                                                                                                                                                                                            
+                                                                                                                                                                                                                                             
+ Fragment 2 [SOURCE]                                                                                                                                                                                                                         
+     Output layout: [orderkey_0, $hashvalue_10]                                                                                                                                                                                              
+     Output partitioning: tpch:orders:15000 [orderkey_0]                                                                                                                                                                                     
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                           
+     - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderkey_0:bigint, $hashvalue_10:bigint]                   
+             Estimates: {source: CostBasedSourceInfo, rows: 60175 (1.03MB), cpu: 541575.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 60175 (1.03MB), cpu: 1624725.00, memory: 0.00, network: 0.00}                   
+             $hashvalue_10 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:77)                                                                                                                           
+             orderkey_0 := tpch:orderkey (1:77)                                                                                                                                                                                              
+                                                                                                                                                                                                                                             
+                                                                                                                                                                                                                                             
+(1 row)                                                                                                           
+                                                                                                                                                                                               
+2)
+SET SESSION join_distribution_type = 'PARTITIONED';
+SET SESSION grouped_execution = false;
+SET SESSION tpch.disable_lineitem_partitioning = false;
+                                                                                                           Query Plan                                                                                                           
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, orderdate] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                           
+         Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 842450.00}                                                                                                                            
+         orderkey := orderkey_0 (1:16)                                                                                                                                                                                          
+     - RemoteStreamingExchange[GATHER] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                   
+             Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 842450.00}                                                                                                                        
+         /*** 这里采用了colocated join，注意colocated-joins-enabled属性默认是开启的 ***/
+         - InnerJoin[("orderkey_0" = "orderkey")][$hashvalue, $hashvalue_10] => [orderkey_0:bigint, orderdate:date]
+                 Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 0.00}                                                                                                                         
+                 Distribution: PARTITIONED                                                                                                                                                                                      
+             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, projectLocality = LOCAL] => [orderkey_0:bigint, $hashvalue:bigint]                  
+                     Estimates: {rows: 60175 (822.71kB), cpu: 541575.00, memory: 0.00, network: 0.00}/{rows: 60175 (822.71kB), cpu: 1624725.00, memory: 0.00, network: 0.00}                                                    
+                     $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:59)                                                                                                         
+                     orderkey_0 := tpch:orderkey (1:58)                                                                                                                                                                         
+             - LocalExchange[HASH][$hashvalue_10] (orderkey) => [orderkey:bigint, orderdate:date, $hashvalue_10:bigint]                                                                                                         
+                     Estimates: {rows: 15000 (205.08kB), cpu: 900000.00, memory: 0.00, network: 0.00}                                                                                                                           
+                 - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, $hashvalue_11:bigint] 
+                         Estimates: {rows: 15000 (205.08kB), cpu: 210000.00, memory: 0.00, network: 0.00}/{rows: 15000 (205.08kB), cpu: 555000.00, memory: 0.00, network: 0.00}                                                 
+                         $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:45)                                                                                                    
+                         orderkey := tpch:orderkey (1:45)                                                                                                                                                                       
+                         orderdate := tpch:orderdate (1:45)                                                                                                                                                                     
+                         tpch:orderstatus                                                                                                                                                                                       
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                           
+                                                                                                                                                                                                                                
+(1 row)
+                                                                                                                 Query Plan                                                                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                         
+     Output layout: [orderkey_0, orderdate]                                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                                          
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                           
+     - Output[orderkey, orderdate] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                                    
+             Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 842450.00}                                                                                                                                     
+             orderkey := orderkey_0 (1:35)                                                                                                                                                                                                   
+         - RemoteSource[1] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                                            
+                                                                                                                                                                                                                                             
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                              
+     Output layout: [orderkey_0, orderdate]                                                                                                                                                                                                  
+     Output partitioning: SINGLE []                                                                                                                                                                                                          
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                           
+     /*** 这里采用了colocated join，注意colocated-joins-enabled属性默认是开启的 ***/ 
+     - InnerJoin[("orderkey_0" = "orderkey")][$hashvalue, $hashvalue_10] => [orderkey_0:bigint, orderdate:date]                                                                                                                              
+             Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 0.00}                                                                                                                                          
+             Distribution: PARTITIONED                                                                                                                                                                                                       
+         - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderkey_0:bigint, $hashvalue:bigint]                  
+                 Estimates: {rows: 60175 (822.71kB), cpu: 541575.00, memory: 0.00, network: 0.00}/{rows: 60175 (822.71kB), cpu: 1624725.00, memory: 0.00, network: 0.00}                                                                     
+                 $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:78)                                                                                                                          
+                 orderkey_0 := tpch:orderkey (1:77)                                                                                                                                                                                          
+         - LocalExchange[HASH][$hashvalue_10] (orderkey) => [orderkey:bigint, orderdate:date, $hashvalue_10:bigint]                                                                                                                          
+                 Estimates: {rows: 15000 (205.08kB), cpu: 900000.00, memory: 0.00, network: 0.00}                                                                                                                                            
+             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = false, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, $hashvalue_11:bigint] 
+                     Estimates: {rows: 15000 (205.08kB), cpu: 210000.00, memory: 0.00, network: 0.00}/{rows: 15000 (205.08kB), cpu: 555000.00, memory: 0.00, network: 0.00}                                                                  
+                     $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:64)                                                                                                                     
+                     orderkey := tpch:orderkey (1:64)                                                                                                                                                                                        
+                     orderdate := tpch:orderdate (1:64)                                                                                                                                                                                      
+                     tpch:orderstatus                                                                                                                                                                                                        
+                         :: [["F"], ["O"], ["P"]]                                                                                                                                                                                            
+                                                                                                                                                                                                                                             
+                                                                                                                                                                                                                                             
+(1 row)
+
+
+3)
+SET SESSION join_distribution_type = 'PARTITIONED';
+SET SESSION grouped_execution = true;
+SET SESSION tpch.disable_lineitem_partitioning = false;
+
+                                                                                                          Query Plan                                                                                                           
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[orderkey, orderdate] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                           
+         Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 842450.00}                                                                                                                            
+         orderkey := orderkey_0 (1:16)                                                                                                                                                                                          
+     - RemoteStreamingExchange[GATHER] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                   
+             Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 842450.00}                                                                                                                        
+         /*** 这里采用了colocated join，同时以grouped execution方式进行计算 ***/ 
+         - InnerJoin[("orderkey_0" = "orderkey")][$hashvalue, $hashvalue_10] => [orderkey_0:bigint, orderdate:date]                                                                                                             
+                 Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 0.00}                                                                                                                         
+                 Distribution: PARTITIONED                                                                                                                                                                                      
+             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, projectLocality = LOCAL] => [orderkey_0:bigint, $hashvalue:bigint]                  
+                     Estimates: {rows: 60175 (822.71kB), cpu: 541575.00, memory: 0.00, network: 0.00}/{rows: 60175 (822.71kB), cpu: 1624725.00, memory: 0.00, network: 0.00}                                                    
+                     $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:59)                                                                                                         
+                     orderkey_0 := tpch:orderkey (1:58)                                                                                                                                                                         
+             - LocalExchange[HASH][$hashvalue_10] (orderkey) => [orderkey:bigint, orderdate:date, $hashvalue_10:bigint]                                                                                                         
+                     Estimates: {rows: 15000 (205.08kB), cpu: 900000.00, memory: 0.00, network: 0.00}                                                                                                                           
+                 - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, $hashvalue_11:bigint] 
+                         Estimates: {rows: 15000 (205.08kB), cpu: 210000.00, memory: 0.00, network: 0.00}/{rows: 15000 (205.08kB), cpu: 555000.00, memory: 0.00, network: 0.00}                                                 
+                         $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:45)                                                                                                    
+                         orderkey := tpch:orderkey (1:45)                                                                                                                                                                       
+                         orderdate := tpch:orderdate (1:45)                                                                                                                                                                     
+                         tpch:orderstatus                                                                                                                                                                                       
+                             :: [["F"], ["O"], ["P"]]                                                                                                                                                                           
+                                                                                                                                                                                                                                
+(1 row)
+
+                                                                                                                 Query Plan                                                                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Fragment 0 [SINGLE]                                                                                                                                                                                                                        
+     Output layout: [orderkey_0, orderdate]                                                                                                                                                                                                 
+     Output partitioning: SINGLE []                                                                                                                                                                                                         
+     Stage Execution Strategy: UNGROUPED_EXECUTION                                                                                                                                                                                          
+     - Output[orderkey, orderdate] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                                   
+             Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 842450.00}                                                                                                                                    
+             orderkey := orderkey_0 (1:35)                                                                                                                                                                                                  
+         - RemoteSource[1] => [orderkey_0:bigint, orderdate:date]                                                                                                                                                                           
+                                                                                                                                                                                                                                            
+ Fragment 1 [tpch:orders:15000]                                                                                                                                                                                                             
+     Output layout: [orderkey_0, orderdate]                                                                                                                                                                                                 
+     Output partitioning: SINGLE []                                                                                                                                                                                                         
+      /***  可以看到这里采用了 grouped execution ***/  
+     Stage Execution Strategy: DYNAMIC_LIFESPAN_SCHEDULE_GROUPED_EXECUTION                                                                                                                                                                  
+     - InnerJoin[("orderkey_0" = "orderkey")][$hashvalue, $hashvalue_10] => [orderkey_0:bigint, orderdate:date]                                                                                                                             
+             Estimates: {rows: 60175 (822.71kB), cpu: 4795325.00, memory: 345000.00, network: 0.00}                                                                                                                                         
+             Distribution: PARTITIONED                                                                                                                                                                                                      
+         - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='lineitem:sf0.01', layout='Optional[lineitem:sf0.01]'}, grouped = true, projectLocality = LOCAL] => [orderkey_0:bigint, $hashvalue:bigint]                  
+                 Estimates: {rows: 60175 (822.71kB), cpu: 541575.00, memory: 0.00, network: 0.00}/{rows: 60175 (822.71kB), cpu: 1624725.00, memory: 0.00, network: 0.00}                                                                    
+                 $hashvalue := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey_0), BIGINT'0')) (1:78)                                                                                                                         
+                 orderkey_0 := tpch:orderkey (1:77)                                                                                                                                                                                         
+         - LocalExchange[HASH][$hashvalue_10] (orderkey) => [orderkey:bigint, orderdate:date, $hashvalue_10:bigint]                                                                                                                         
+                 Estimates: {rows: 15000 (205.08kB), cpu: 900000.00, memory: 0.00, network: 0.00}                                                                                                                                           
+             - ScanProject[table = TableHandle {connectorId='tpch', connectorHandle='orders:sf0.01', layout='Optional[orders:sf0.01]'}, grouped = true, projectLocality = LOCAL] => [orderkey:bigint, orderdate:date, $hashvalue_11:bigint] 
+                     Estimates: {rows: 15000 (205.08kB), cpu: 210000.00, memory: 0.00, network: 0.00}/{rows: 15000 (205.08kB), cpu: 555000.00, memory: 0.00, network: 0.00}                                                                 
+                     $hashvalue_11 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:64)                                                                                                                    
+                     orderkey := tpch:orderkey (1:64)                                                                                                                                                                                       
+                     orderdate := tpch:orderdate (1:64)                                                                                                                                                                                     
+                     tpch:orderstatus                                                                                                                                                                                                       
+                         :: [["F"], ["O"], ["P"]]                                                                                                                                                                                           
+                                                                                                                                                                                                                                            
+                                                                                                                                                                                                                                            
+(1 row)
+
+
+4)
+SET SESSION join_distribution_type = 'PARTITIONED';
+SET SESSION grouped_execution = true;
+SET SESSION tpch.disable_lineitem_partitioning = false;
+
+// orders作为build table，我们disable它的grouped execution，但作为probe table的lineitem，
+// 我们还是开启grouped execution。因此，整个query同时包含了两种不同的pipeline 执行策略。
+// 参考: com.facebook.presto.execution.SqlTaskExecution#scheduleTableScanSource
+// 参考: commit "support mixed pipeline execution policy for tpch"
+SET SESSION tpch.disable_orders_grouped_execution=true;
+
+(plan 和 case #3一样)

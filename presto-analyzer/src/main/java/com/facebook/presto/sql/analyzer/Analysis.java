@@ -402,6 +402,9 @@ public class Analysis
         return joins.get(NodeRef.of(join));
     }
 
+    /**
+     * where, select, group by, having, order by等语句中可以包含子查询
+     */
     public void recordSubqueries(Node node, ExpressionAnalysis expressionAnalysis)
     {
         NodeRef<Node> key = NodeRef.of(node);
@@ -975,9 +978,9 @@ public class Analysis
         return expandedQuery;
     }
 
-    public void setCurrentSubquery(QuerySpecification currentSubQuery)
+    public void setCurrentQuerySpecification(QuerySpecification currentQuerySpecification)
     {
-        this.currentQuerySpecification = Optional.of(currentSubQuery);
+        this.currentQuerySpecification = Optional.of(currentQuerySpecification);
     }
     public Optional<QuerySpecification> getCurrentQuerySpecification()
     {

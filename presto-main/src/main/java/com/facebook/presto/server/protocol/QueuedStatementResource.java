@@ -536,11 +536,20 @@ public class QueuedStatementResource
                 if (querySubmissionFuture == null) {
                     querySubmissionFuture = dispatchManager.createQuery(queryId, slug, retryCount, sessionContext, query);
                 }
+                /**
+                 * 等待{@link com.facebook.presto.dispatcher.DispatchQuery}创建完成，期间会进行permissions校验，
+                 * session处理，词法分析等。创建过程完成后（querySubmissionFuture变为done），会触发对prerequisites
+                 * 条件的异步等待（后续还会进行排队，资源等待，执行等）。
+                 */
                 if (!querySubmissionFuture.isDone()) {
                     return querySubmissionFuture;
                 }
             }
             // otherwise, wait for the query to finish
+            /**
+             * 这个ListenableFuture变为done时，并不表示query已经完成了，仅仅表示query已经
+             * 完成了排队和资源等待，进入到开始执行阶段。
+             */
             return dispatchManager.waitForDispatched(queryId);
         }
 
@@ -595,6 +604,16 @@ public class QueuedStatementResource
                 }
             }
 
+            /**
+             * 如果请求在完成dispatch之前就失败了，即{@link com.facebook.presto.dispatcher.LocalDispatchQuery#startExecution}
+             * 没有完成{@link com.facebook.presto.execution.SqlQueryManager#createQuery}的执行，则dispatchInfo一定会设置
+             * {@link DispatchInfo#failureInfo}。这种情况下，{@link LocalQueryProvider#getQuery}将会抛出异常，因为对应的
+             * {@link com.facebook.presto.execution.QueryExecution}没有注册到{@link com.facebook.presto.execution.QueryTracker}中。
+             *
+             * 参考：
+             * {@link com.facebook.presto.dispatcher.DispatchManager#createQuery} 如何创建dispatch query
+             *
+             */
             Optional<DispatchInfo> dispatchInfo = dispatchManager.getDispatchInfo(queryId);
             if (!dispatchInfo.isPresent()) {
                 // query should always be found, but it may have just been determined to be abandoned

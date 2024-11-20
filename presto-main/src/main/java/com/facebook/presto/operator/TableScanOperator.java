@@ -150,6 +150,11 @@ public class TableScanOperator
     {
         Split split = requireNonNull(scheduledSplit, "scheduledSplit is null").getSplit();
         requireNonNull(split, "split is null");
+
+        /**
+         * {@link com.facebook.presto.execution.SqlTaskExecution#scheduleTableScanSource}会保证为每个
+         * split source单独创建一个{@link Driver}。
+         */
         checkState(this.split == null, "Table scan split already set");
 
         if (finished) {

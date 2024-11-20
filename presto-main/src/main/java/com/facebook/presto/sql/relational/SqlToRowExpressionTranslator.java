@@ -688,6 +688,9 @@ public final class SqlToRowExpressionTranslator
                 return new UnresolvedSymbolExpression(getSourceLocation(node), returnType, getQualifiedName(node).getParts());
             }
 
+            /**
+             * 参考: {@link com.facebook.presto.sql.analyzer.ExpressionAnalyzer.Visitor#visitDereferenceExpression}
+             */
             if (isEnumType(baseType) && isEnumType(returnType)) {
                 return constant(resolveEnumLiteral(node, baseType), returnType);
             }

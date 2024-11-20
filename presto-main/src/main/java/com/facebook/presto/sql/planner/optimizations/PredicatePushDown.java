@@ -124,6 +124,27 @@ import static com.google.common.collect.Iterables.filter;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Function.identity;
 
+/**
+ * 将上层的predicate下推到靠近{@link TableScanNode}的{@link FilterNode}, 即对于如下逻辑计划:
+ * OutputNode
+ *   ProjectNode
+ *      FilterNode(predicate)
+ *        ...
+ *          ProjectNode
+ *            TableScanNode
+ * 改写为：
+ * OutputNode
+ *   ProjectNode
+ *      FilterNode(predicateX)
+ *        ...
+ *          ProjectNode
+ *            FilterNode(predicateY)
+ *              TableScanNode
+ *
+ * 之后, {@link AddExchanges}会进一步将predicate下推到TableScan内部, 实现参考:
+ * 1. {@link AddExchanges.Rewriter#planTableScan}
+ * 2. {@link com.facebook.presto.sql.planner.iterative.rule.PickTableLayout#pushPredicateIntoTableScan}
+ */
 public class PredicatePushDown
         implements PlanOptimizer
 {
@@ -297,6 +318,10 @@ public class PredicatePushDown
             return rewrittenNode;
         }
 
+        /**
+         * TODO: 这里如何简化FilterNode中的predicate的？
+         * select orderkey, test from (select orderkey, cast(null as varchar) as test from orders) where test = 'abc';
+         */
         @Override
         public PlanNode visitProject(ProjectNode node, RewriteContext<RowExpression> context)
         {
@@ -1778,6 +1803,10 @@ public class PredicatePushDown
             return context.defaultRewrite(node, context.get());
         }
 
+        /**
+         * TODO: 这里如何简化FilterNode中的predicate的？
+         * select orderkey, test from (select orderkey, cast(null as varchar) as test from orders) where test = 'abc';
+         */
         @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<RowExpression> context)
         {

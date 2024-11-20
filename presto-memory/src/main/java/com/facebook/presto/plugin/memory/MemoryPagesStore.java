@@ -28,7 +28,9 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.facebook.presto.plugin.memory.MemoryErrorCode.MEMORY_LIMIT_EXCEEDED;
 import static com.facebook.presto.plugin.memory.MemoryErrorCode.MISSING_DATA;
@@ -59,6 +61,11 @@ public class MemoryPagesStore
 
     public synchronized void add(Long tableId, Page page)
     {
+        add(tableId, 0, page);
+    }
+
+    public synchronized void add(Long tableId, int bucket, Page page)
+    {
         if (!contains(tableId)) {
             throw new PrestoException(MISSING_DATA, "Failed to find table on a worker.");
         }
@@ -72,11 +79,12 @@ public class MemoryPagesStore
         currentBytes = newSize;
 
         TableData tableData = tables.get(tableId);
-        tableData.add(page);
+        tableData.add(bucket, page);
     }
 
     public synchronized List<Page> getPages(
             Long tableId,
+            int bucket,
             int partNumber,
             int totalParts,
             List<Integer> columnIndexes,
@@ -85,16 +93,19 @@ public class MemoryPagesStore
         if (!contains(tableId)) {
             throw new PrestoException(MISSING_DATA, "Failed to find table on a worker.");
         }
-        TableData tableData = tables.get(tableId);
-        if (tableData.getRows() < expectedRows) {
+        BucketedTableData bucketedTableData = tables.get(tableId).getBucketedTableData(bucket);
+        if (bucketedTableData.getRows() < expectedRows) {
             throw new PrestoException(MISSING_DATA,
-                    format("Expected to find [%s] rows on a worker, but found [%s].", expectedRows, tableData.getRows()));
+                    format("Expected to find [%s] rows on a worker, but found [%s].", expectedRows, bucketedTableData.getRows()));
         }
 
         ImmutableList.Builder<Page> partitionedPages = ImmutableList.builder();
 
-        for (int i = partNumber; i < tableData.getPages().size(); i += totalParts) {
-            partitionedPages.add(getColumns(tableData.getPages().get(i), columnIndexes));
+        /**
+         * 按照partNumber, partNumber + totalParts, partNumber + 2 * totalParts, ... 方式来对pages进行划分。
+         */
+        for (int i = partNumber; i < bucketedTableData.getPages().size(); i += totalParts) {
+            partitionedPages.add(getColumns(bucketedTableData.getPages().get(i), columnIndexes));
         }
 
         return partitionedPages.build();
@@ -146,13 +157,51 @@ public class MemoryPagesStore
 
     private static final class TableData
     {
+        private final Map<Integer, BucketedTableData> bucketedData = new HashMap<>();
+        private long totalRows = 0;
+
+        public void add(int bucket, Page page)
+        {
+            bucketedData.computeIfAbsent(bucket, BucketedTableData::new).add(page);
+            totalRows += page.getPositionCount();
+        }
+
+        public BucketedTableData getBucketedTableData(int bucket)
+        {
+            return bucketedData.computeIfAbsent(bucket, BucketedTableData::new);
+        }
+
+        public List<Page> getPages()
+        {
+            return bucketedData.values().stream().flatMap(b -> b.getPages().stream()).collect(Collectors.toList());
+        }
+
+        public long getTotalRows()
+        {
+            return totalRows;
+        }
+    }
+
+    private static final class BucketedTableData
+    {
+        private final int bucket;
         private final List<Page> pages = new ArrayList<>();
         private long rows;
+
+        public BucketedTableData(int bucket)
+        {
+            this.bucket = bucket;
+        }
 
         public void add(Page page)
         {
             pages.add(page);
             rows += page.getPositionCount();
+        }
+
+        private int getBucket()
+        {
+            return bucket;
         }
 
         private List<Page> getPages()

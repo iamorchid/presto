@@ -20,13 +20,17 @@ import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.FixedSplitSource;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.NodeManager;
+import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.facebook.presto.spi.connector.ConnectorSplitManager;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.google.common.collect.ImmutableList;
 
-import java.util.Set;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public class TpchSplitManager
         implements ConnectorSplitManager
@@ -51,19 +55,47 @@ public class TpchSplitManager
         TpchTableLayoutHandle tableLayoutHandle = (TpchTableLayoutHandle) layout;
         TpchTableHandle tableHandle = tableLayoutHandle.getTable();
 
-        Set<Node> nodes = nodeManager.getRequiredWorkerNodes();
+        List<Node> nodes = ImmutableList.copyOf(nodeManager.getRequiredWorkerNodes());
+        final int totalParts = nodes.size() * splitsPerNode;
 
-        int totalParts = nodes.size() * splitsPerNode;
-        int partNumber = 0;
+        if (splitSchedulingContext.getSplitSchedulingStrategy() == SplitSchedulingStrategy.UNGROUPED_SCHEDULING) {
+            int partNumber = 0;
 
-        // Split the data using split and skew by the number of nodes available.
-        ImmutableList.Builder<ConnectorSplit> splits = ImmutableList.builder();
-        for (Node node : nodes) {
-            for (int i = 0; i < splitsPerNode; i++) {
-                splits.add(new TpchSplit(tableHandle, partNumber, totalParts, ImmutableList.of(node.getHostAndPort()), tableLayoutHandle.getPredicate()));
-                partNumber++;
+            // Split the data using split and skew by the number of nodes available.
+            ImmutableList.Builder<ConnectorSplit> splits = ImmutableList.builder();
+            for (Node node : nodes) {
+                for (int i = 0; i < splitsPerNode; i++) {
+                    splits.add(new TpchSplit(tableHandle, partNumber, totalParts, ImmutableList.of(node.getHostAndPort()), tableLayoutHandle.getPredicate()));
+                    partNumber++;
+                }
             }
+            return new FixedSplitSource(splits.build());
         }
-        return new FixedSplitSource(splits.build());
+
+        return new ConnectorSplitSource() {
+            private int processedParts = 0;
+
+            @Override
+            public CompletableFuture<ConnectorSplitBatch> getNextBatch(ConnectorPartitionHandle partitionHandle, int maxSize) {
+                try {
+                    int partNumber = ((TpchPartitionHandle) partitionHandle).getBucket();
+                    Node node = nodes.get(partNumber % nodes.size());
+                    ConnectorSplit split = new TpchSplit(tableHandle, partNumber, totalParts, ImmutableList.of(node.getHostAndPort()), tableLayoutHandle.getPredicate());
+                    return completedFuture(new ConnectorSplitBatch(Collections.singletonList(split), true));
+                } finally {
+                    ++processedParts;
+                }
+            }
+
+            @Override
+            public void close() {
+
+            }
+
+            @Override
+            public boolean isFinished() {
+                return processedParts >= totalParts;
+            }
+        };
     }
 }

@@ -150,6 +150,8 @@ void getData(
             } else {
               auto next = std::move(page);
               bytes += next->length();
+              // iobuf->prev()表示双向链表中末尾的IOBuf, 下面的操作表示将next放到链表
+              // 末尾. 最新的folly支持: iobuf->appendToChain(std::move(next)).
               iobuf->prev()->appendChain(std::move(next));
             }
             nextSequence++;

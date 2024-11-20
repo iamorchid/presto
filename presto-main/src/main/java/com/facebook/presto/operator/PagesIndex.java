@@ -85,7 +85,7 @@ public class PagesIndex
 
     private final List<Type> types;
     private final AdaptiveLongBigArray valueAddresses;
-    private final ObjectArrayList<Block>[] channels;
+    private final ObjectArrayList<Block>[] channels; // ObjectArrayList: 即ObjectArray实现的List
     private final boolean eagerCompact;
 
     private int nextBlockToCompact;

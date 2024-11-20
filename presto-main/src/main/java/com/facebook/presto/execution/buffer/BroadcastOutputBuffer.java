@@ -287,6 +287,10 @@ public class BroadcastOutputBuffer
         checkFlushComplete();
     }
 
+    /**
+     * 关于setNoMorePages()的调用时机，参见：
+     * {@link com.facebook.presto.execution.SqlTaskExecution#checkTaskCompletion()}
+     */
     @Override
     public void setNoMorePages()
     {
@@ -309,6 +313,10 @@ public class BroadcastOutputBuffer
         if (state.setIf(FINISHED, oldState -> !oldState.isTerminal())) {
             noMoreBuffers();
 
+            /**
+             * 调用{@link ClientBuffer#destroy()}后，ClientBuffer将清理内存中的pages，同时不再
+             * 接受新的pages。后续对ClientBuffer的读取，将直接返回bufferComplete为true的空结构。
+             */
             safeGetBuffersSnapshot().forEach(ClientBuffer::destroy);
 
             memoryManager.setNoBlockOnFull();

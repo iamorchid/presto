@@ -245,7 +245,7 @@ public class ExpressionAnalyzer
     private final SqlFunctionProperties sqlFunctionProperties;
     private final Map<NodeRef<Parameter>, Expression> parameters;
     private final WarningCollector warningCollector;
-    // Map to resolved type of any symbols that ExpressionAnalyzer cannot resolved within current scope.
+    // Map to resolved type of any symbols that ExpressionAnalyzer cannot resolve within current scope.
     // This contains types of variables referenced from outer scopes.
     private final Map<NodeRef<Expression>, Type> outerScopeSymbolTypes;
 
@@ -403,6 +403,9 @@ public class ExpressionAnalyzer
         {
             if (node instanceof Expression) {
                 // don't double process a node
+                /**
+                 * {@link StatementAnalyzer.Visitor#analyzeGroupBy}中, 存在一个expression进行analyze多次的情况
+                 */
                 Type type = expressionTypes.get(NodeRef.of(((Expression) node)));
                 if (type != null) {
                     return type;
@@ -474,7 +477,8 @@ public class ExpressionAnalyzer
             if (!resolvedField.isPresent() && outerScopeSymbolTypes.containsKey(NodeRef.of(node))) {
                 return setExpressionType(node, outerScopeSymbolTypes.get(NodeRef.of(node)));
             }
-            return handleResolvedField(node, resolvedField.orElseThrow(() -> missingAttributeException(node, name)), context);
+            final ResolvedField field = resolvedField.orElseThrow(() -> missingAttributeException(node, name));
+            return handleResolvedField(node, field, context);
         }
 
         private Type handleResolvedField(Expression node, ResolvedField resolvedField, StackableAstVisitorContext<Context> context)

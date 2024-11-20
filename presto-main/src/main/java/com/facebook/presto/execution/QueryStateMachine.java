@@ -977,7 +977,7 @@ public class QueryStateMachine
      * Listener is always notified asynchronously using a dedicated notification thread pool so, care should
      * be taken to avoid leaking {@code this} when adding a listener in a constructor.
      */
-    public void addQueryInfoStateChangeListener(StateChangeListener<QueryInfo> stateChangeListener)
+    public void addFinalQueryInfoStateChangeListener(StateChangeListener<QueryInfo> stateChangeListener)
     {
         AtomicBoolean done = new AtomicBoolean();
         StateChangeListener<Optional<QueryInfo>> fireOnceStateChangeListener = finalQueryInfo -> {

@@ -413,6 +413,17 @@ public class PartitionedOutputOperator
             }
 
             Page partitionFunctionArgs = getPartitionFunctionArguments(page);
+            /**
+             * 对于semi join, 当采用partitioned join type时, 会开启replicateNulls, 此时nullChannel大于0.
+             * 
+             * set session tpch.disable_orders_partitioning=true;
+             * set session join_distribution_type='PARTITIONED';
+             * select clerk, orderkey from orders where (orderkey in (select case when orderkey < 3 then null else orderkey end from lineitem)) is null;
+             * 
+             * 参考:
+             * {@link com.facebook.presto.sql.planner.optimizations.ActualProperties.Global#nullsAndAnyReplicated}
+             * sqls-samples/sqls-join-semi
+             */
             // Skip null block checks if mayHaveNull reports that no positions will be null
             if (nullChannel >= 0 && page.getBlock(nullChannel).mayHaveNull()) {
                 Block nullsBlock = page.getBlock(nullChannel);

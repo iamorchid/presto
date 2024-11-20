@@ -22,6 +22,11 @@ import javax.validation.constraints.NotNull;
 import static io.airlift.units.DataSize.Unit.BYTE;
 
 // This is separate from MemoryManagerConfig because it's difficult to test the default value of maxQueryMemoryPerNode
+/**
+ * 参考：
+ * {@link com.facebook.presto.spiller.NodeSpillConfig}
+ * {@link com.facebook.presto.memory.MemoryManagerConfig}
+ */
 public class NodeMemoryConfig
 {
     public static final long AVAILABLE_HEAP_MEMORY = Runtime.getRuntime().maxMemory();

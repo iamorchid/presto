@@ -100,7 +100,7 @@ public class ValidateAggregationsWithDefaultValues
             }
 
             // When partial aggregation is pushed down we do not have an intermediate aggregation step
-            if (isPartialAggregationPusheddown(node)) {
+            if (isPartialAggregationPushedDown(node)) {
                 return Optional.empty();
             }
             checkState(seenExchangesOptional.isPresent(), "No partial aggregation below final aggregation");
@@ -128,7 +128,7 @@ public class ValidateAggregationsWithDefaultValues
             return Optional.empty();
         }
 
-        private boolean isPartialAggregationPusheddown(AggregationNode node)
+        private boolean isPartialAggregationPushedDown(AggregationNode node)
         {
             if (node.getStep().equals(FINAL)) {
                 if (node.getSource() instanceof ExchangeNode

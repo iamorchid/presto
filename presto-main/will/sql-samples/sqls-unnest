@@ -1,0 +1,7 @@
+with tbl as (
+    values('[49, 50, 45, 47, 50]', '[1, 5, 6]', '[7, 10]')
+)
+select c from
+    tbl as t(r), unnest(cast(json_parse(r) as array(bigint))) as t2(c)
+order by c
+limit 20;

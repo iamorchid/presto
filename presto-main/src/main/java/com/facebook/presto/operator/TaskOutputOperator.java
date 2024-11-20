@@ -127,6 +127,15 @@ public class TaskOutputOperator
     @Override
     public boolean isFinished()
     {
+        /**
+         * {@link TaskOutputOperator#isFinished()}为true，并不表示{@link com.facebook.presto.execution.SqlTask}可以进入
+         * {@link com.facebook.presto.execution.TaskState#FINISHED}，它仅仅表是当前{@link Driver}数据都已经写入全部写入到了
+         * outputBuffer中（一个SqlTask可以包含多个Driver和一个outputBuffer，Driver本身不知道SqlTask何时结束）。SqlTask要打到
+         * FINISHED状态，必须等到所有的Driver都完成且outputBuffer中的数据被消费完成。
+         *
+         * task何时完成，参考：
+         * {@link com.facebook.presto.execution.SqlTaskExecution#checkTaskCompletion()}
+         */
         return finished && isBlocked().isDone();
     }
 

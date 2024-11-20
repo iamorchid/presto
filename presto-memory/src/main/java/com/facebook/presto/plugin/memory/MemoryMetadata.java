@@ -25,6 +25,7 @@ import com.facebook.presto.spi.ConnectorTableLayout;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutResult;
 import com.facebook.presto.spi.ConnectorTableMetadata;
+import com.facebook.presto.spi.ConnectorTablePartitioning;
 import com.facebook.presto.spi.ConnectorViewDefinition;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.HostAddress;
@@ -37,6 +38,7 @@ import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.ViewNotFoundException;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
+import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -80,7 +82,7 @@ public class MemoryMetadata
     private final AtomicLong nextTableId = new AtomicLong();
     private final Map<SchemaTableName, Long> tableIds = new HashMap<>();
     private final Map<Long, MemoryTableHandle> tables = new HashMap<>();
-    private final Map<Long, Map<HostAddress, MemoryDataFragment>> tableDataFragments = new HashMap<>();
+    private final Map<Long, Map<HostAddress, Map<Integer, MemoryDataFragment>>> tableDataFragments = new HashMap<>();
     private final Map<SchemaTableName, String> views = new HashMap<>();
 
     @Inject
@@ -194,7 +196,8 @@ public class MemoryMetadata
                 newTableName.getSchemaName(),
                 newTableName.getTableName(),
                 oldTableHandle.getTableId(),
-                oldTableHandle.getColumnHandles());
+                oldTableHandle.getColumnHandles(),
+                oldTableHandle.getBucketProperty());
         tableIds.remove(oldTableHandle.toSchemaTableName());
         tableIds.put(newTableName, oldTableHandle.getTableId());
         tables.remove(oldTableHandle.getTableId());
@@ -324,11 +327,15 @@ public class MemoryMetadata
                 "Uninitialized table [%s.%s]",
                 table.getSchemaName(),
                 table.getTableName());
-        Map<HostAddress, MemoryDataFragment> dataFragments = tableDataFragments.get(table.getTableId());
+        Map<HostAddress, Map<Integer, MemoryDataFragment>> dataFragments = tableDataFragments.get(table.getTableId());
 
         for (Slice fragment : fragments) {
             MemoryDataFragment memoryDataFragment = MemoryDataFragment.fromSlice(fragment);
-            dataFragments.merge(memoryDataFragment.getHostAddress(), memoryDataFragment, MemoryDataFragment::merge);
+            Map<Integer, MemoryDataFragment> bucketedFrags = dataFragments.computeIfAbsent(
+                    memoryDataFragment.getHostAddress(),
+                    h -> new HashMap<>()
+            );
+            bucketedFrags.merge(memoryDataFragment.getBucket(), memoryDataFragment, MemoryDataFragment::merge);
         }
     }
 
@@ -349,7 +356,11 @@ public class MemoryMetadata
                 memoryTableHandle.getTableName());
 
         List<MemoryDataFragment> expectedFragments = ImmutableList.copyOf(
-                tableDataFragments.get(memoryTableHandle.getTableId()).values());
+                tableDataFragments.get(memoryTableHandle.getTableId())
+                        .values()
+                        .stream()
+                        .flatMap(b -> b.values().stream())
+                        .collect(toList()));
 
         MemoryTableLayoutHandle layoutHandle = new MemoryTableLayoutHandle(memoryTableHandle, expectedFragments);
         return ImmutableList.of(new ConnectorTableLayoutResult(getTableLayout(session, layoutHandle), constraint.getSummary()));
@@ -358,11 +369,20 @@ public class MemoryMetadata
     @Override
     public synchronized ConnectorTableLayout getTableLayout(ConnectorSession session, ConnectorTableLayoutHandle handle)
     {
+        MemoryTableHandle tableHandle = ((MemoryTableLayoutHandle) handle).getTable();
+        Optional<ConnectorTablePartitioning> tablePartitioning = tableHandle.getBucketProperty().map(bucketProperty -> {
+            ConnectorPartitioningHandle partitioningHandle = new MemoryPartitioningHandle(bucketProperty);
+            List<ColumnHandle> partitioningColumns = tableHandle.getColumnHandles().stream()
+                    .filter(c -> bucketProperty.getBucketedBy().contains(c.getName()))
+                    .collect(toList());
+            return new ConnectorTablePartitioning(partitioningHandle, partitioningColumns);
+        });
+
         return new ConnectorTableLayout(
                 handle,
                 Optional.empty(),
                 TupleDomain.all(),
-                Optional.empty(),
+                tablePartitioning,
                 Optional.empty(),
                 Optional.empty(),
                 ImmutableList.of());

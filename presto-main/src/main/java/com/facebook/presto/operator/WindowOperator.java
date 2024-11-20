@@ -232,6 +232,22 @@ public class WindowOperator
         requireNonNull(spillerFactory, "spillerFactory is null");
         checkArgument(sortChannels.size() == sortOrder.size(), "Must have same number of sort channels as sort orders");
         checkArgument(preSortedChannelPrefix <= sortChannels.size(), "Cannot have more pre-sorted channels than specified sorted channels");
+
+        /**
+         * 假设上一个WindowOperator进行了 f1(...) over (partition by col1 order by col3)，而当前WindowOperator
+         * 进行了 f2(...) over (partition by col1, col2 order by col3, col4)，对于这种情况，上一个算子的col1可以
+         * 作为本算子的preGroupedChannels，但很显然，上一次算子的排序对本算子没有任何帮助，即preSortedChannelPrefix
+         * 必须设置为0。
+         *
+         * 这里WindowOperator会用到preSortedChannelPrefix和preGroupedChannels：
+         *   SELECT clerk, orderdate, orderkey,
+         *       sum(rolling_sum) OVER (PARTITION BY clerk ORDER BY orderdate, orderkey) AS rolling_sum_again
+         *   FROM (
+         *     SELECT clerk, orderdate, orderkey, totalprice,
+         *         sum(totalprice) OVER (PARTITION BY clerk ORDER BY orderdate) AS rolling_sum
+         *     FROM orders
+         *   )
+         */
         checkArgument(preSortedChannelPrefix == 0 || ImmutableSet.copyOf(preGroupedChannels).equals(ImmutableSet.copyOf(partitionChannels)), "preSortedChannelPrefix can only be greater than zero if all partition channels are pre-grouped");
 
         this.operatorContext = operatorContext;

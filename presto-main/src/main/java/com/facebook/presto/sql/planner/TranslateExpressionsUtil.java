@@ -54,6 +54,7 @@ public class TranslateExpressionsUtil
     public static RowExpression toRowExpression(Expression expression, Metadata metadata, Session session, SqlParser sqlParser, VariableAllocator variableAllocator, Analysis analysis, SqlToRowExpressionTranslator.Context context)
     {
         Scope scope = Scope.builder().withRelationType(RelationId.anonymous(), new RelationType()).build();
+        // 这里会往analysis填充新的expression=>type映射
         analyzeExpression(session,
                 metadata,
                 new DenyAllAccessControl(),
@@ -63,12 +64,12 @@ public class TranslateExpressionsUtil
                 analysis,
                 expression,
                 WarningCollector.NOOP,
-                analysis.getTypes()).getExpressionTypes();
+                analysis.getTypes());
         return toRowExpression(
                 expression,
                 metadata,
                 session,
-                analysis.getTypes(), // We need to pass all types when translating subqueries. TODO(pranjalssh): Add a proper test for complex queries which need this
+                analysis.getTypes(), // We need to pass all types when translating subqueries.
                 context);
     }
 

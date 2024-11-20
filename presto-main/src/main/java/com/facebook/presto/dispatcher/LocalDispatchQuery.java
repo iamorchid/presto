@@ -113,6 +113,10 @@ public class LocalDispatchQuery
         this.retry = retry;
         this.queryPrerequisites = requireNonNull(queryPrerequisites, "queryPrerequisites is null");
         this.warningCollector = requireNonNull(stateMachine.getWarningCollector(), "warningCollector is null");
+        /**
+         * 如果query语义解析失败，则不会创建QueryExecution，此时queryExecutionFuture将fail。而stateMachine的状态
+         * 将由当前LocalDispatchQuery进行管理。相反，如果QueryExecution被成功创建，则stateMachine将有它管理。
+         */
         addExceptionCallback(queryExecutionFuture, throwable -> {
             if (stateMachine.transitionToFailed(throwable)) {
                 queryMonitor.queryImmediateFailureEvent(stateMachine.getBasicQueryInfo(Optional.empty()), toFailure(throwable));
@@ -210,6 +214,14 @@ public class LocalDispatchQuery
             if (isDispatching) {
                 try {
                     resourceGroupQueryLimits.get().ifPresent(queryExecution::setResourceGroupQueryLimits);
+
+                    /**
+                     * 这里对应的是{@link com.facebook.presto.execution.SqlQueryManager#createQuery}，它并不会发创建
+                     * query，而是开始query的执行（包括查询优化、生成logical和physical plan、调度等）。
+                     *
+                     * {@link QueryExecution}的创建发生在{@link LocalDispatchQueryFactory#createDispatchQuery}，对于
+                     * {@link com.facebook.presto.execution.SqlQueryExecution}来说，它的构造函数中就会进行语义分析。
+                     */
                     querySubmitter.accept(queryExecution);
                 }
                 catch (Throwable t) {

@@ -80,7 +80,7 @@ public class GroupIdOperator
                         .build();
             }
 
-            // create groupid blocks for every group
+            // create groupId blocks for every group
             Block[] groupIdBlocks = new Block[groupingSetMappings.size()];
             for (int i = 0; i < groupingSetMappings.size(); i++) {
                 BlockBuilder builder = BIGINT.createBlockBuilder(null, 1);

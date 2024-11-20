@@ -272,13 +272,14 @@ public class AddExchanges
             boolean hasMixedGroupingSets = node.hasEmptyGroupingSet() && node.hasNonEmptyGroupingSet();
             PreferredProperties preferredProperties = preferSingleNode ? PreferredProperties.undistributed() : PreferredProperties.any();
 
-            // If aggregation has a mixed of non-global and global grouping set, an repartition exchange is any way needed to eliminate duplicate default outputs
+            // If aggregation has a mix of non-global and global grouping set, a repartition exchange is any way needed to eliminate duplicate default outputs
             // from partial aggregations (enforced in `ValidateAggregationWithDefaultValues.java`). Therefore, we don't have preference on what the child will return.
             if (!node.getGroupingKeys().isEmpty() && !hasMixedGroupingSets) {
                 AggregationPartitioningMergingStrategy aggregationPartitioningMergingStrategy = getAggregationPartitioningMergingStrategy(session);
                 preferredProperties = PreferredProperties.partitionedWithLocal(partitioningRequirement, grouped(node.getGroupingKeys()))
                         .mergeWithParent(parentPreferredProperties, shouldAggregationMergePartitionPreferences(aggregationPartitioningMergingStrategy));
 
+                // 这里为啥要支持采用merged PreferredProperties，可以参考{@link #visitWindow}中的说明。
                 if (aggregationPartitioningMergingStrategy.isAdoptingMergedPreference()) {
                     checkState(preferredProperties.getGlobalProperties().isPresent() && preferredProperties.getGlobalProperties().get().getPartitioningProperties().isPresent());
                     partitioningRequirement = ImmutableSet.copyOf(preferredProperties.getGlobalProperties().get().getPartitioningProperties().get().getPartitioningColumns());
@@ -388,6 +389,14 @@ public class AddExchanges
                                     idAllocator.getNextId(),
                                     selectExchangeScopeForPartitionedRemoteExchange(child.getNode(), false),
                                     child.getNode(),
+                                    /**
+                                     * 这里的逻辑是否应该和{@link #visitAggregation}一样，支持类似AggregationPartitioningMergingStrategy
+                                     * 的策略来决定是否采用通过merged preference来选择partitioning columns ?? 否则，存在如下问题。
+                                     *
+                                     * 假设WindowNode的下游节点的preferredProperties希望采用列[a, b]进行partitioning，而WindowNode的partition
+                                     * 列为[a, b, c]。如果这里的ExchangeNode以列[a, b, c]进行partitioning，则会导致WindowNode的partitioning无法
+                                     * 满足下游节点的partitioning要求，从而导致WindowNode和它的下游节点之间引入额外的ExchangeNode。
+                                     */
                                     createPartitioning(node.getPartitionBy()),
                                     node.getHashVariable()),
                             child.getProperties());
@@ -537,6 +546,10 @@ public class AddExchanges
                 // current plan so far is single node, so local properties are effectively global properties
                 // don't need an extra exchange if the node is already sorted on the desired columns
                 // a later optimization will remove this sort node
+                /**
+                 * 能否删除当前的SortNode来进行优化，还依赖于上游node（即这里的child）是不是single stream。
+                 * 参考：{@link com.facebook.presto.sql.planner.optimizations.AddLocalExchanges.Rewriter#visitSort}
+                 */
                 List<LocalProperty<VariableReferenceExpression>> desiredProperties = new ArrayList<>();
                 for (VariableReferenceExpression variable : node.getOrderingScheme().getOrderByVariables()) {
                     desiredProperties.add(new SortingProperty<>(variable, node.getOrderingScheme().getOrdering(variable)));
@@ -550,9 +563,13 @@ public class AddExchanges
 
             if (isDistributedSortEnabled(session)) {
                 child = planChild(node, PreferredProperties.any());
-                // insert round robin exchange to eliminate skewness issues
+                // insert round-robin exchange to eliminate skewness issues
                 PlanNode source = roundRobinExchange(idAllocator.getNextId(), REMOTE_STREAMING, child.getNode());
                 return withDerivedProperties(
+                        /**
+                         * 这里采用归并排序，即上游stage先进行partial sort，下游再通过single stream（即单个Driver的pipeline）
+                         * 进行归并排序，更多说明参考{@link ActualProperties}。
+                         */
                         mergingExchange(
                                 idAllocator.getNextId(),
                                 REMOTE_STREAMING,
@@ -854,9 +871,17 @@ public class AddExchanges
 
             PlanWithProperties right;
 
+            /**
+             * 这里可以看到，当left（或者right）运行在单个结点上时（即{@link ActualProperties#isSingleNode}，join node总是会
+             * 进行对它的结果进行REPARTITION。这样做的好处事，通过REPARTITION来减少单个JOIN子任务消耗的内存。
+             */
             if (isNodePartitionedOn(left.getProperties(), leftVariables) && !left.getProperties().isSingleNode()) {
                 Partitioning rightPartitioning = left.getProperties().translateVariable(createTranslator(leftToRight)).getNodePartitioning().get();
                 right = accept(node.getRight(), PreferredProperties.partitioned(rightPartitioning));
+
+                /**
+                 * 如果left和right使用的table partitioning是一致的，那么它们就可以采用colocated-join。
+                 */
                 if (!right.getProperties().isCompatibleTablePartitioningWith(left.getProperties(), rightToLeft::get, metadata, session) &&
                         // TODO: Deprecate compatible table partitioning
                         !(right.getProperties().isRefinedPartitioningOver(left.getProperties(), rightToLeft::get, metadata, session) &&
@@ -866,6 +891,20 @@ public class AddExchanges
                                     idAllocator.getNextId(),
                                     selectExchangeScopeForPartitionedRemoteExchange(right.getNode(), false),
                                     right.getNode(),
+                                    /**
+                                     * 这里的rightPartitioning其实遵从的是left的{@link Partitioning}，只不过{@link Partitioning#arguments}
+                                     * 的变量引用置换为了right的输出变量名称。采用left的{@link Partitioning}，可以确保right的输出结果能够写到left
+                                     * 预期的partition上（通过Partitioning获得的BucketFunction + bucketToPartition）。
+                                     *
+                                     * 同时，left采用一致的Partitioning，可以保证split调度到的node和该node上消费的上游stage输出的partition是一致的，
+                                     * 即通过splitToBucket, bucketToNode, bucketToPartition以及partitionToNode。
+                                     *
+                                     * 参考：
+                                     * {@link com.facebook.presto.sql.planner.NodePartitionMap}
+                                     * {@link com.facebook.presto.sql.planner.NodePartitioningManager#getPartitionFunction} 调用 {@link ConnectorNodePartitioningProvider#getBucketFunction}
+                                     * {@link com.facebook.presto.execution.scheduler.SectionExecutionFactory#createStageScheduler}创建FixedSourcePartitionedScheduler
+                                     * {@link com.facebook.presto.execution.scheduler.FixedSourcePartitionedScheduler#schedule}先创建指定taskId的任务，之后再进行splits的调度。
+                                     */
                                     new PartitioningScheme(rightPartitioning, right.getNode().getOutputVariables())),
                             right.getProperties());
                 }
@@ -928,6 +967,8 @@ public class AddExchanges
             PlanWithProperties right = accept(node.getRight(), PreferredProperties.any());
 
             if (left.getProperties().isSingleNode()) {
+                // 通过这里的判断可以知道，对于replicate的场景，build table（即right table）也可以分发到多个结点
+                // 上来并行处理对应的splits。此时，需要引入GATHER exchange来收集所有build table的splits结果。
                 if (!right.getProperties().isSingleNode() ||
                         (!isColocatedJoinEnabled(session) && hasMultipleTableScans(left.getNode(), right.getNode()))) {
                     right = withDerivedProperties(
@@ -1046,7 +1087,13 @@ public class AddExchanges
                     if (filteringSource.getProperties().isNodePartitionedOn(filteringSourceVariables, true, isExactPartitioningPreferred(session)) && !filteringSource.getProperties().isSingleNode()) {
                         Partitioning sourcePartitioning = filteringSource.getProperties().translateVariable(createTranslator(filteringToSource)).getNodePartitioning().get();
                         source = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, source.getNode(), new PartitioningScheme(sourcePartitioning, source.getNode().getOutputVariables())),
+                                partitionedExchange(
+                                        idAllocator.getNextId(),
+                                        REMOTE_STREAMING,
+                                        source.getNode(),
+                                        new PartitioningScheme(
+                                                sourcePartitioning,
+                                                source.getNode().getOutputVariables())),
                                 source.getProperties());
                     }
                     else {
@@ -1059,7 +1106,13 @@ public class AddExchanges
                                         Optional.empty()),
                                 source.getProperties());
                         filteringSource = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE_STREAMING, filteringSource.getNode(), createPartitioning(filteringSourceVariables), Optional.empty(), true),
+                                partitionedExchange(
+                                        idAllocator.getNextId(),
+                                        REMOTE_STREAMING,
+                                        filteringSource.getNode(),
+                                        createPartitioning(filteringSourceVariables),
+                                        Optional.empty(),
+                                        true),
                                 filteringSource.getProperties());
                     }
                 }

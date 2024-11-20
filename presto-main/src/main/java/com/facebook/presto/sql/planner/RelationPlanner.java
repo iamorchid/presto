@@ -209,17 +209,17 @@ class RelationPlanner
         TableHandle handle = analysis.getTableHandle(node);
 
         ImmutableList.Builder<VariableReferenceExpression> outputVariablesBuilder = ImmutableList.builder();
-        ImmutableMap.Builder<VariableReferenceExpression, ColumnHandle> columns = ImmutableMap.builder();
+        ImmutableMap.Builder<VariableReferenceExpression, ColumnHandle> assignments = ImmutableMap.builder();
         for (Field field : scope.getRelationType().getAllFields()) {
             VariableReferenceExpression variable = variableAllocator.newVariable(getSourceLocation(node), field.getName().get(), field.getType());
             outputVariablesBuilder.add(variable);
-            columns.put(variable, analysis.getColumn(field));
+            assignments.put(variable, analysis.getColumn(field));
         }
 
         List<VariableReferenceExpression> outputVariables = outputVariablesBuilder.build();
         List<TableConstraint<ColumnHandle>> tableConstraints = metadata.getTableMetadata(session, handle).getMetadata().getTableConstraintsHolder().getTableConstraintsWithColumnHandles();
         context.incrementLeafNodes(session);
-        PlanNode root = new TableScanNode(getSourceLocation(node.getLocation()), idAllocator.getNextId(), handle, outputVariables, columns.build(), tableConstraints, TupleDomain.all(), TupleDomain.all());
+        PlanNode root = new TableScanNode(getSourceLocation(node.getLocation()), idAllocator.getNextId(), handle, outputVariables, assignments.build(), tableConstraints, TupleDomain.all(), TupleDomain.all());
 
         return new RelationPlan(root, scope, outputVariables);
     }

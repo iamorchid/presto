@@ -1,0 +1,144 @@
+### 使用example connector
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+## 在partitioning_precision_strategy不为PREFER_EXACT_PARTITIONING情况下，为何两个WindowNode
+## 之间还会引入remote ExchangeNode？？
+## 参见 com.facebook.presto.sql.planner.optimizations.AddExchanges.Rewriter#visitWindow注释
+explain
+select clerk, orderdate, orderkey, sum(rolling_sum) over (PARTITION BY clerk order by orderdate, orderkey) as rolling_sum_again
+from (
+  SELECT clerk, orderdate, orderkey, totalprice,
+        sum(totalprice) OVER (PARTITION BY clerk, orderkey
+                              ORDER BY orderdate) AS rolling_sum
+  FROM orders
+)
+
+                                                                                                                                                            Query Plan                                                                                                   
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, orderdate, orderkey, rolling_sum_again] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum_26:double]                                                                                                                                           
+         rolling_sum_again := sum_26 (1:44)                                                                                                                                                                                                                              
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum_26:double]                                                                                                                                                             
+         - Project[projectLocality = LOCAL] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum_26:double]                                                                                                                                                        
+             - Window[partition by (clerk), order by (orderdate ASC_NULLS_LAST, orderkey ASC_NULLS_LAST)][$hashvalue] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum:double, $hashvalue:bigint, sum_26:double]                                               
+                     sum_26 := sum(sum) RANGE UNBOUNDED_PRECEDING CURRENT_ROW (1:44)                                                                                                                                                                                     
+                 - LocalExchange[HASH][$hashvalue] (clerk) => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum:double, $hashvalue:bigint]                                                                                                                         
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_43] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum:double, $hashvalue_43:bigint]                                                                                                      
+                         - Project[projectLocality = LOCAL] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum:double, $hashvalue_44:bigint]                                                                                                                     
+                             - Window[partition by (clerk, orderkey), order by (orderdate ASC_NULLS_LAST)][$hashvalue_45] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue_44:bigint, $hashvalue_45:bigint, sum:double]              
+                                     sum := sum(totalprice) RANGE UNBOUNDED_PRECEDING CURRENT_ROW (1:191)                                                                                                                                                                
+                                 - LocalExchange[HASH][$hashvalue_45] (clerk, orderkey) => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue_44:bigint, $hashvalue_45:bigint]                                                            
+                                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                      
+                                     - RemoteStreamingExchange[REPARTITION][$hashvalue_47] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue_46:bigint, $hashvalue_47:bigint]                                                         
+                                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                  
+                                         - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}, projectLocality = LOCAL] => [orderkey:bigint, totalprice:double, orderdate:varchar, cl
+                                                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                        
+                                                 $hashvalue_48 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (1:282)                                                                                                                       
+                                                 $hashvalue_49 := combine_hash(combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')), COALESCE($operator$hash_code(orderkey), BIGINT'0')) (1:282)                                                     
+                                                 orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (1:282)                                                                                              
+                                                 totalprice := ExampleColumnHandle{connectorId=example, columnName=totalprice, columnType=double, ordinalPosition=3} (1:282)                                                                                             
+                                                 clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (1:282)                                                                                                      
+                                                 orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (1:282)                                                                                                 
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+# 这里WindowOperator会用到preSortedChannelPrefix和preGroupedChannels
+select clerk, orderdate, orderkey, sum(rolling_sum) over (PARTITION BY clerk order by orderdate, orderkey) as rolling_sum_again
+from (
+  SELECT clerk, orderdate, orderkey, totalprice,
+        sum(totalprice) OVER (PARTITION BY clerk
+                              ORDER BY orderdate) AS rolling_sum
+  FROM orders
+)
+
+                                                                                                                                             Query Plan                                                                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, orderdate, orderkey, rolling_sum_again] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum_25:double]                                                                                                                                           
+         rolling_sum_again := sum_25 (1:44)                                                                                                                                                                                                                              
+     - RemoteStreamingExchange[GATHER] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum_25:double]                                                                                                                                                             
+         - Project[projectLocality = LOCAL] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum_25:double]                                                                                                                                                        
+             - Window[partition by (<clerk>), order by (<orderdate ASC_NULLS_LAST>, orderkey ASC_NULLS_LAST)][$hashvalue] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum:double, $hashvalue:bigint, sum_25:double]                                           
+                     sum_25 := sum(sum) RANGE UNBOUNDED_PRECEDING CURRENT_ROW (1:44)                                                                                                                                                                                     
+                 - Project[projectLocality = LOCAL] => [clerk:varchar, orderdate:varchar, orderkey:bigint, sum:double, $hashvalue:bigint]                                                                                                                                
+                     - Window[partition by (clerk), order by (orderdate ASC_NULLS_LAST)][$hashvalue] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue:bigint, sum:double]                                                            
+                             sum := sum(totalprice) RANGE UNBOUNDED_PRECEDING CURRENT_ROW (4:9)                                                                                                                                                                          
+                         - LocalExchange[HASH][$hashvalue] (clerk) => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue:bigint]                                                                                                          
+                                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                              
+                             - RemoteStreamingExchange[REPARTITION][$hashvalue_42] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue_42:bigint]                                                                                       
+                                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                          
+                                 - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}, projectLocality = LOCAL] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varc
+                                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                
+                                         $hashvalue_43 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (6:8)                                                                                                                                 
+                                         orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (6:8)                                                                                                        
+                                         orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (6:8)                                                                                                           
+                                         clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (6:8)                                                                                                                
+                                         totalprice := ExampleColumnHandle{connectorId=example, columnName=totalprice, columnType=double, ordinalPosition=3} (6:8)                                                                                                       
+                                                                                                                                                                                                                                                                         
+(1 row)
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+SELECT clerk, orderdate, orderkey, totalprice,
+       sum(totalprice) OVER (PARTITION BY clerk
+                             ORDER BY orderdate) AS rolling_sum
+FROM orders
+
+                                                                                                                                         Query Plan                                                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, orderdate, orderkey, totalprice, rolling_sum] => [clerk:varchar, orderdate:varchar, orderkey:bigint, totalprice:double, sum:double]                                                                                                                     
+         rolling_sum := sum (2:8)                                                                                                                                                                                                                                        
+     - RemoteStreamingExchange[GATHER] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                                                                                             
+         - Project[projectLocality = LOCAL] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                                                                                        
+             - Window[partition by (clerk), order by (orderdate ASC_NULLS_LAST)][$hashvalue] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue:bigint, sum:double]                                                                    
+                     sum := sum(totalprice) RANGE UNBOUNDED_PRECEDING CURRENT_ROW (2:8)                                                                                                                                                                                  
+                 - LocalExchange[HASH][$hashvalue] (clerk) => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue:bigint]                                                                                                                  
+                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                                      
+                     - RemoteStreamingExchange[REPARTITION][$hashvalue_22] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue_22:bigint]                                                                                               
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                                  
+                         - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}, projectLocality = LOCAL] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $ha
+                                 Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                                        
+                                 $hashvalue_23 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (4:6)                                                                                                                                         
+                                 orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (4:6)                                                                                                                
+                                 orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (4:6)                                                                                                                   
+                                 clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (4:6)                                                                                                                        
+                                 totalprice := ExampleColumnHandle{connectorId=example, columnName=totalprice, columnType=double, ordinalPosition=3} (4:6)                                                                                                               
+                                                                                                                                                                                                                                                                         
+(1 row)
+                                                                                                  
+                                                                                                                                                                                                                                                                         
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+SELECT clerk, orderdate, orderkey, totalprice,
+       sum(totalprice) OVER (PARTITION BY clerk
+                             ORDER BY orderdate) AS rolling_sum
+FROM orders
+ORDER BY clerk, orderdate, orderkey
+
+                                                                                                                                               Query Plan                                                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ - Output[clerk, orderdate, orderkey, totalprice, rolling_sum] => [clerk:varchar, orderdate:varchar, orderkey:bigint, totalprice:double, sum:double]                                                                                                                     
+         rolling_sum := sum (2:8)                                                                                                                                                                                                                                        
+     - RemoteStreamingMerge[clerk ASC_NULLS_LAST, orderdate ASC_NULLS_LAST, orderkey ASC_NULLS_LAST] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                               
+         - LocalMerge[clerk ASC_NULLS_LAST, orderdate ASC_NULLS_LAST, orderkey ASC_NULLS_LAST] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                                     
+             - PartialSort[clerk ASC_NULLS_LAST, orderdate ASC_NULLS_LAST, orderkey ASC_NULLS_LAST] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                                
+                 - RemoteStreamingExchange[REPARTITION] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                                                                            
+                     - Project[projectLocality = LOCAL] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, sum:double]                                                                                                                            
+                         - Window[partition by (clerk), order by (orderdate ASC_NULLS_LAST)][$hashvalue] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue:bigint, sum:double]                                                        
+                                 sum := sum(totalprice) RANGE UNBOUNDED_PRECEDING CURRENT_ROW (2:8)                                                                                                                                                                      
+                             - LocalExchange[HASH][$hashvalue] (clerk) => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue:bigint]                                                                                                      
+                                     Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                          
+                                 - RemoteStreamingExchange[REPARTITION][$hashvalue_20] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:varchar, $hashvalue_20:bigint]                                                                                   
+                                         Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: ?}                                                                                                                                                                      
+                                     - ScanProject[table = TableHandle {connectorId='example', connectorHandle='example:tpch:orders', layout=Optional[example:tpch:orders]}, projectLocality = LOCAL] => [orderkey:bigint, totalprice:double, orderdate:varchar, clerk:
+                                             Estimates: {rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}                                                                                                            
+                                             $hashvalue_21 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(clerk), BIGINT'0')) (4:6)                                                                                                                             
+                                             orderdate := ExampleColumnHandle{connectorId=example, columnName=orderdate, columnType=varchar, ordinalPosition=4} (4:6)                                                                                                    
+                                             orderkey := ExampleColumnHandle{connectorId=example, columnName=orderkey, columnType=bigint, ordinalPosition=0} (4:6)                                                                                                       
+                                             clerk := ExampleColumnHandle{connectorId=example, columnName=clerk, columnType=varchar, ordinalPosition=6} (4:6)                                                                                                            
+                                             totalprice := ExampleColumnHandle{connectorId=example, columnName=totalprice, columnType=double, ordinalPosition=3} (4:6)                                                                                                   
+                                                                                                                                                                                                                                                                         
+(1 row)
+

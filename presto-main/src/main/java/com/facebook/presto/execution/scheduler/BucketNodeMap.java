@@ -39,6 +39,11 @@ public abstract class BucketNodeMap
 
     public abstract void assignOrUpdateBucketToNode(int bucketedId, InternalNode node, boolean cacheable);
 
+    /**
+     * {@link #isDynamic()}为true，表示bucket和node没有定义固定的映射关系，调度层可以根据需要动态设置bucket
+     * 和node映射关系。而采用dynamic的映射关系是有条件的，即如果存在上游stage，则上游必须采用broadcast方式来输
+     * 出数据到下游stage（即使用当前{@link BucketNodeMap}调度split的stage）。
+     */
     public abstract boolean isDynamic();
 
     public abstract boolean hasInitialMap();

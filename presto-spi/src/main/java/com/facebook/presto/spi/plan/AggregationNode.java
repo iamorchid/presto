@@ -22,7 +22,6 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.annotation.concurrent.Immutable;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -151,6 +150,10 @@ public final class AggregationNode
 
     public boolean hasEmptyGroupingSet()
     {
+        /**
+         * EmptyGroupingSet 即这里所指的 GlobalGroupingSet. GroupingSetDescriptor的初始化逻辑参考
+         * {@link com.facebook.presto.sql.planner.QueryPlanner#aggregate}.
+         */
         return !groupingSets.getGlobalGroupingSets().isEmpty();
     }
 

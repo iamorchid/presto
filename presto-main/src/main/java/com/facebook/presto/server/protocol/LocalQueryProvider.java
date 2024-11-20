@@ -82,6 +82,7 @@ public class LocalQueryProvider
     @PostConstruct
     public void start()
     {
+        // TODO 这里为何不通过query的事件侦听来进行purger ??
         queryPurger.scheduleWithFixedDelay(
                 () -> {
                     try {

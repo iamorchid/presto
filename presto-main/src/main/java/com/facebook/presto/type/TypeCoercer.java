@@ -136,6 +136,17 @@ public class TypeCoercer
             return Optional.of(sourceType);
         }
 
+        /**
+         * 支持ipaddress到varchar的隐式转换 (即允许presto自动添加cast操作), 但我们必须提供cast(ip as varchar)
+         * 的具体实现, 参考: {@link IpAddressOperators#castFromIpAddressToVarchar}
+         *
+         * with addresses(ip) as (VALUES (cast('192.168.0.0' as ipaddress)), (cast('192.168.0.1' as ipaddress)))
+         * SELECT ip FROM addresses where ip like '%192.16%';
+         */
+        if (sourceType.equals(IpAddressType.IPADDRESS) && resultTypeBase.equals(StandardTypes.VARCHAR)) {
+            return Optional.of(createVarcharType(15));
+        }
+
         switch (sourceTypeName) {
             case UnknownType.NAME: {
                 switch (resultTypeBase) {
@@ -382,6 +393,7 @@ public class TypeCoercer
                 return TypeCompatibility.compatible(toSemanticType(toType, commonSuperType), commonSuperType.equals(standardToType));
             }
             if (fromTypeBaseName.equals(StandardTypes.VARCHAR)) {
+                /* 这里要求standardToType必须是standardFromType的super type时, 才满足coercible为true */
                 Type commonSuperType = getCommonSuperTypeForVarchar((VarcharType) standardFromType, (VarcharType) standardToType);
                 return TypeCompatibility.compatible(toSemanticType(toType, commonSuperType), commonSuperType.equals(standardToType));
             }
@@ -410,6 +422,10 @@ public class TypeCoercer
             if (!typeCompatibility.isCompatible()) {
                 return TypeCompatibility.incompatible();
             }
+            /**
+             * fromType和toType有common supper type, 但是coerceTypeBase中没有定义规则允许从fromType
+             * 隐式转到toType (即不用显示进行cast, 由presto自动进行cast).
+             */
             return TypeCompatibility.compatible(toSemanticType(toType, typeCompatibility.getCommonSuperType()), false);
         }
 

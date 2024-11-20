@@ -256,7 +256,7 @@ public class StateMachine<T>
      * Listener is always notified asynchronously using a dedicated notification thread pool so, care should
      * be taken to avoid leaking {@code this} when adding a listener in a constructor. Additionally, it is
      * possible notifications are observed out of order due to the asynchronous execution. The listener is
-     * immediately notified immediately of the current state.
+     * immediately notified of the current state.
      */
     public void addStateChangeListener(StateChangeListener<T> stateChangeListener)
     {

@@ -88,6 +88,7 @@ public final class PagesHash
             // to extracting hashes on the fly in the loop below.
             for (int position = 0; position < stepSize; position++) {
                 int realPosition = position + stepBeginPosition;
+                // 计算所在position的hashed columns的hash值
                 long hash = readHashPosition(realPosition);
                 positionToFullHashes[position] = hash;
                 positionToHashes[realPosition] = (byte) hash;
@@ -96,6 +97,8 @@ public final class PagesHash
             // index pages
             for (int position = 0; position < stepSize; position++) {
                 int realPosition = position + stepBeginPosition;
+
+                // Checks if any of the hashed columns is null
                 if (isPositionNull(realPosition)) {
                     ++positionIsNullCountLocal;
                     continue;
@@ -112,7 +115,7 @@ public final class PagesHash
                         // link the new key position to the current key position
                         realPosition = positionLinks.link(realPosition, currentKey);
 
-                        // key[pos] updated outside of this loop
+                        // key[pos] updated outside this loop
                         break;
                     }
                     // increment position and mask to handler wrap around

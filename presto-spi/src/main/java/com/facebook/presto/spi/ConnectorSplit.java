@@ -30,6 +30,10 @@ public interface ConnectorSplit
     NodeSelectionStrategy getNodeSelectionStrategy();
 
     /**
+     * 仅当connector没有使用{@link ConnectorTablePartitioning}以及{@link com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider}
+     * 才会用到这个，否则将通过{@link com.facebook.presto.spi.connector.ConnectorBucketNodeMap}来决定split的调度。
+     */
+    /**
      * Provide a list of preferred nodes for scheduler to pick.
      * 1. The scheduler will respect the preference if the strategy is HARD_AFFINITY.
      * 2. Otherwise, the scheduler will prioritize the provided nodes if the strategy is SOFT_AFFINITY.

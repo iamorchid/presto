@@ -160,6 +160,9 @@ public class FileSingleStreamSpiller
                         .map(serde::serialize)
                         .forEach(serializedPage -> {
                             long pageSize = serializedPage.getSizeInBytes();
+                            /**
+                             * 这里可能会达到max spill限制，参考{@link NodeSpillConfig#queryMaxSpillPerNode}
+                             */
                             localSpillContext.updateBytes(pageSize);
                             spillerStats.addToTotalSpilledBytes(pageSize);
                             writeSerializedPage(output, serializedPage);

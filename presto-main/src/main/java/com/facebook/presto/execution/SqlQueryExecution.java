@@ -207,6 +207,9 @@ public class SqlQueryExecution
                     Thread.currentThread(),
                     timeoutThreadExecutor,
                     getQueryAnalyzerTimeout(getSession()))) {
+                /**
+                 * 这里对query进行语义分析（比如，table、column的校验等）
+                 */
                 this.queryAnalysis = queryAnalyzer.analyze(analyzerContext, preparedQuery);
             }
 
@@ -540,7 +543,7 @@ public class SqlQueryExecution
     @Override
     public void addFinalQueryInfoListener(StateChangeListener<QueryInfo> stateChangeListener)
     {
-        stateMachine.addQueryInfoStateChangeListener(stateChangeListener);
+        stateMachine.addFinalQueryInfoStateChangeListener(stateChangeListener);
     }
 
     private PlanRoot createLogicalPlanAndOptimize()
@@ -681,6 +684,11 @@ public class SqlQueryExecution
 
         // if query was canceled during scheduler creation, abort the scheduler
         // directly since the callback may have already fired
+        /**
+         * 上面注释的意思是说，queryScheduler还没有来得及设置的时候，stateMachine就已经变为done了。因此，
+         * {@link #SqlQueryExecution}构造函数中注册的StateChangeListener触发时，将无法执行abort操作。
+         * 这里确实需要再次进行判断下，逻辑比较缜密。
+         */
         if (stateMachine.isDone()) {
             scheduler.abort();
             queryScheduler.set(null);
@@ -841,6 +849,13 @@ public class SqlQueryExecution
 
         QueryInfo queryInfo = stateMachine.updateQueryInfo(stageInfo);
         if (queryInfo.isFinalQueryInfo()) {
+            /**
+             * 当query已经结束后（不仅仅是query的状态stateMachine变为done，还要求所有的stage以及task也为done），
+             * queryScheduler便不再需要，将它置为null，可以加快它被gc回收。
+             *
+             * 对于已经结束的query，再执行{@link SqlQueryScheduler#abort()}也没有意义，因此下面的操作对构造函数
+             * {@link #SqlQueryExecution}中stateMachine已注册的callback没有影响。
+             */
             // capture the final query state and drop reference to the scheduler
             queryScheduler.set(null);
         }

@@ -423,11 +423,11 @@ class PreferredProperties
 
             if (parent.partitioning.isPresent()) {
                 // If the parent has a partitioning preference, propagate parent only if the parent's partitioning columns satisfies our preference.
-                // Otherwise, ignore the parent since the parent will have to repartition anyways.
+                // Otherwise, ignore the parent since the parent will have to repartition anyway.
                 return partitioningColumns.containsAll(parent.partitioningColumns) ? parent : this;
             }
 
-            // Otherwise partition on any common columns if available
+            // Otherwise, partition on any common columns if available
             Set<VariableReferenceExpression> common = Sets.intersection(partitioningColumns, parent.partitioningColumns);
             return common.isEmpty() ? this : partitioned(common).withNullsAndAnyReplicated(nullsAndAnyReplicated);
         }
