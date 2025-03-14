@@ -498,6 +498,7 @@ proxygen::RequestHandler* TaskResource::getResults(
       });
 }
 
+// [star][rpc] TaskResource::getTaskStatus
 proxygen::RequestHandler* TaskResource::getTaskStatus(
     proxygen::HTTPMessage* message,
     const std::vector<std::string>& pathMatch) {

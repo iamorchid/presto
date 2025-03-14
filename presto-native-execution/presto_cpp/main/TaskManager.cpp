@@ -90,6 +90,13 @@ static void maybeSetupTaskSpillDirectory(
 // Since raising the exception releases all promise's resources
 // including eventBase, it allows the server to stop the
 // threads successfully and shutdown gracefully.
+//
+// 参考HttpServer.h文件中有关CallbackRequestHandlerState的说明. 当http请求
+// timeout后, 会触发promiseHolder的reset操作(见CallbackRequestHandler的析
+// 构函数), 如果此时promise还没有fulfilled, 则result会设置为"BrokenPromise"
+// 异常. 但通过TaskResource::getTaskStatus之类的rpc处理方法可以知道, 在返回结果
+// 或者错误之前, 会先检查handlerState->requestExpired().
+//
 template <typename T>
 void keepPromiseAlive(
     PromiseHolderPtr<T> promiseHolder,
@@ -501,6 +508,7 @@ std::unique_ptr<TaskInfo> TaskManager::createOrUpdateTaskImpl(
       maybeSetupTaskSpillDirectory(planFragment, *newExecTask, baseSpillDir);
 
       prestoTask->task = std::move(newExecTask);
+      // 告诉coordinator, 不再需要plan信息
       prestoTask->info.needsPlan = false;
       startTask = true;
     }
@@ -606,6 +614,7 @@ std::unique_ptr<TaskInfo> TaskManager::createOrUpdateTaskImpl(
   return std::make_unique<TaskInfo>(info);
 }
 
+// 可以看到velox不对abort或者cancel进行区分
 std::unique_ptr<TaskInfo> TaskManager::deleteTask(
     const TaskId& taskId,
     bool /*abort*/) {
@@ -848,12 +857,22 @@ folly::Future<std::unique_ptr<Result>> TaskManager::getResults(
     auto prestoTask = findOrCreateTask(taskId);
 
     // If the task is aborted or failed, then return an error.
+    //
+    // 如果当前状态处于ABORTED, 这说明query被用户cancel 或者 其他task已失败 (某个task
+    // 失败时, coordinator会abort其他的tasks). 这里需要hold住下请求(不能立即返回empty
+    // 结果, 否则下游tasks会立刻再次发起请求), 因为下游tasks应该很快能收到coordinator下
+    // 发的ABORT请求了.
+    //
     if (prestoTask->info.taskStatus.state == protocol::TaskState::ABORTED) {
       // respond with a delay to prevent request "bursts"
       return folly::futures::sleep(std::chrono::microseconds(maxWaitMicros))
           .via(httpSrvCpuExecutor_)
           .thenValue([token](auto&&) { return createEmptyResult(token); });
     }
+
+    // TaskResource::createOrUpdateTaskImpl创建velox task失败后, 会设置这个error.
+    // 当coordinator通过getTaskStatus或者getTaskInfo感知到当前task失败后, 会abort
+    // 所有其他的tasks.
     if (prestoTask->error != nullptr) {
       LOG(WARNING) << "Calling getResult() on a failed PrestoTask: " << taskId;
       // respond with a delay to prevent request "bursts"
@@ -908,7 +927,7 @@ folly::Future<std::unique_ptr<Result>> TaskManager::getResults(
       if (prestoTask->taskStarted) {
         continue;
       }
-      // The task is not started yet, put the request
+      // The task is not started yet, put the request into queue
       VLOG(1) << "Queuing up result request for task " << taskId
               << ", destination " << destination << ", sequence " << token;
 
@@ -958,11 +977,15 @@ folly::Future<std::unique_ptr<protocol::TaskStatus>> TaskManager::getTaskStatus(
   {
     std::lock_guard<std::mutex> l(prestoTask->mutex);
     prestoTask->updateCoordinatorHeartbeatLocked();
+
+    // prestoTask->task为nullptr, 说明之前尚未执行createOrUpdateTaskImpl
     if (!prestoTask->task) {
       auto promiseHolder = std::make_shared<
           PromiseHolder<std::unique_ptr<protocol::TaskStatus>>>(
           std::move(promise));
 
+      // 将promiseHolder和request生命周期关联起来 (请求本身可以因为timeout等
+      // 原因提前返回, 注意, 和下面future的timeout是两码事).
       keepPromiseAlive(promiseHolder, state);
       prestoTask->statusRequest = folly::to_weak_ptr(promiseHolder);
       return std::move(future)

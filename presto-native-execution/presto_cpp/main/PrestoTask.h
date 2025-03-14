@@ -30,6 +30,9 @@ struct PromiseHolder {
   explicit PromiseHolder(folly::Promise<T> p) : promise(std::move(p)) {}
   folly::Promise<T> promise;
 
+  // 参见TaskManager::getResults说明, 允许PromiseHolder析构时, 为没有
+  // fulfilled promise设置默认值. 否则, folly会默认设置BrokenPromise
+  // 异常, 导致future端获取到exception.
   void atDestruction(
       std::function<void(folly::Promise<T> promise)> atDestruction) {
     atDestruction_ = atDestruction;

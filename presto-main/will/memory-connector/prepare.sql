@@ -64,14 +64,14 @@ CREATE TABLE memory.tiny."bucketed-lineitem" (
     comment varchar(44)
  ) with ("bucketed-by" = 'orderkey');
 
-INSERT INTO memory.tiny.orders (SELECT * FROM tpch.tiny.orders);
-select count(*) from memory.tiny.orders;
-
-INSERT INTO memory.tiny.lineitem (SELECT * FROM tpch.tiny.lineitem);
-select count(*) from memory.tiny.lineitem;
-
-INSERT INTO memory.tiny."bucketed-orders" (SELECT * FROM tpch.tiny.orders);
-select count(*) from memory.tiny."bucketed-orders";
-
-INSERT INTO memory.tiny."bucketed-lineitem" (SELECT * FROM tpch.tiny.lineitem);
-select count(*) from memory.tiny."bucketed-lineitem";
+--INSERT INTO memory.tiny.orders (SELECT * FROM tpch.tiny.orders);
+--select count(*) from memory.tiny.orders;
+--
+--INSERT INTO memory.tiny.lineitem (SELECT * FROM tpch.tiny.lineitem);
+--select count(*) from memory.tiny.lineitem;
+--
+--INSERT INTO memory.tiny."bucketed-orders" (SELECT * FROM tpch.tiny.orders);
+--select count(*) from memory.tiny."bucketed-orders";
+--
+--INSERT INTO memory.tiny."bucketed-lineitem" (SELECT * FROM tpch.tiny.lineitem);
+--select count(*) from memory.tiny."bucketed-lineitem";

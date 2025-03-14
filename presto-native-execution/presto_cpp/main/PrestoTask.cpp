@@ -333,7 +333,8 @@ protocol::TaskStatus PrestoTask::updateStatusLocked() {
   }
 
   // Error occurs when creating task or even before task is created. Set error
-  // and return immediately
+  // and return immediately. Coordinator would abort all other tasks after it's
+  // aware of this task failure.
   if (error != nullptr) {
     if (info.taskStatus.failures.empty()) {
       info.taskStatus.failures.emplace_back(toPrestoError(error));

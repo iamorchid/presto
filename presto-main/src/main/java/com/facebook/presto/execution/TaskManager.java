@@ -130,8 +130,7 @@ public interface TaskManager
 
     /**
      * Aborts a result buffer for a task.  If the task or buffer has not been
-     * created yet, an uninitialized task is created and a the buffer is
-     * aborted.
+     * created yet, an uninitialized task is created and the buffer is aborted.
      * <p>
      * NOTE: this design assumes that only tasks and buffers that will
      * eventually exist are queried.

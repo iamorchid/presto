@@ -99,6 +99,7 @@ public final class MemorySplitManager
                         it.remove();
                     }
                 }
+                // 这里限定了一个bucket的数据不会跨多个机器
                 checkState(targetFrags.size() <= 1, "each bucket should only have one data fragment");
                 return completedFuture(new ConnectorSplitBatch(splitGenerator.apply(targetFrags), true));
             }

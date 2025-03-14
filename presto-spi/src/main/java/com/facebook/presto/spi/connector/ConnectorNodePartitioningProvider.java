@@ -51,7 +51,7 @@ public interface ConnectorNodePartitioningProvider
      */
     /**
      * 本质上可以认为{@link ConnectorPartitionHandle}是对单个bucket的封装，当然一个ConnectorPartitionHandle也可以
-     * 对应多个bucket，但当remote source不为REPLICATE时，则会break先有的限制性检查。
+     * 对应多个bucket，但当remote source不为REPLICATE时，则会break现有的限制性检查。
      *
      * 可以参考{@link com.facebook.presto.execution.scheduler.SectionExecutionFactory#createStageScheduler}
      * 中如何使用{@link #listPartitionHandles}的返回值。

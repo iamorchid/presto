@@ -311,6 +311,8 @@ public class LogicalPlanner
         Analysis.Insert insertAnalysis = analysis.getInsert().get();
 
         TableHandle tableHandle = insertAnalysis.getTarget();
+        // insert into部分显示指定需要插入的columns, 比如对于insert into t1(f1, f2) select a, b from t2
+        // columnHandles对应的则是 f1, f2
         List<ColumnHandle> columnHandles = insertAnalysis.getColumns();
         WriterTarget target = new InsertReference(tableHandle, metadata.getTableMetadata(session, tableHandle).getTable());
 
@@ -339,9 +341,12 @@ public class LogicalPlanner
         Map<String, ColumnHandle> columns = metadata.getColumnHandles(session, tableHandle);
         Assignments.Builder assignments = Assignments.builder();
         for (ColumnMetadata column : tableMetadata.getColumns()) {
+            // 可以看到, 对于hidden column总是忽略, 哪怕insert into中已经显示指定了
             if (column.isHidden()) {
                 continue;
             }
+
+            // 下面的逻辑是: 为没有在insert into列表中的列, 自动使用null进行插入
             VariableReferenceExpression output = variableAllocator.newVariable(getSourceLocation(query), column.getName(), column.getType());
             int index = columnHandles.indexOf(columns.get(column.getName()));
             if (index < 0) {
