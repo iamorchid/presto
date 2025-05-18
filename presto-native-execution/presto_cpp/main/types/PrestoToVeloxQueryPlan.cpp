@@ -543,6 +543,13 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
     const std::shared_ptr<const protocol::FilterNode>& node,
     const std::shared_ptr<protocol::TableWriteInfo>& tableWriteInfo,
     const protocol::TaskId& taskId) {
+  //
+  // 要满足下面的算子条件, 需要通过optimizer.optimize-hash-generation property或者
+  // optimize_hash_generation session来禁用HashGenerationOptimizer. 否则, 算子的
+  // pipeline将为: Filter->Project(移除hashvalue)->SemiJoin. 之所以禁用hash优化器,
+  // 估计是考虑到presto和velox之间hash的兼容性问题.
+  // 参见presto代码: NativeQueryRunnerUtils#getNativeWorkerSystemProperties.
+  //
   // In Presto, semi and anti joins are implemented using two operators:
   // SemiJoin followed by Filter. SemiJoin operator returns all probe rows plus
   // an extra boolean column which indicates whether there is a match for a
@@ -558,6 +565,7 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
   if (auto semiJoin = std::dynamic_pointer_cast<const protocol::SemiJoinNode>(
           node->source)) {
     std::optional<core::JoinType> joinType = std::nullopt;
+    // semiJoinOutput对应SemiJoin输出的extra boolean列的名称.
     if (equal(node->predicate, semiJoin->semiJoinOutput)) {
       joinType = core::JoinType::kLeftSemiFilter;
     } else if (auto notCall = isNot(node->predicate)) {
@@ -595,6 +603,9 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
       projections.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
           leftTypes[i], leftNames[i]));
     }
+
+    // kLeftSemiFilter和kAnti会仅仅返回符合要求的行, 因此这里返回给Filter算子的
+    // boolean列, 可以直接为常量.
     const bool constantValue =
         joinType.value() == core::JoinType::kLeftSemiFilter;
     projections.emplace_back(
@@ -607,7 +618,7 @@ core::PlanNodePtr VeloxQueryPlanConverterBase::toVeloxQueryPlan(
         std::make_shared<core::HashJoinNode>(
             semiJoin->id,
             joinType.value(),
-            joinType == core::JoinType::kAnti ? true : false,
+            joinType == core::JoinType::kAnti ? true : false, // nullAware
             leftKeys,
             rightKeys,
             nullptr, // filter

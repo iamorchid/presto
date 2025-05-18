@@ -75,3 +75,35 @@ CREATE TABLE memory.tiny."bucketed-lineitem" (
 --
 --INSERT INTO memory.tiny."bucketed-lineitem" (SELECT * FROM tpch.tiny.lineitem);
 --select count(*) from memory.tiny."bucketed-lineitem";
+
+CREATE TABLE memory.tiny.complex_types_table (
+    id INT,
+    user_info ROW(
+        name VARCHAR,
+        age INT,
+        address ROW(city VARCHAR, zip_code VARCHAR)
+    ),
+    interests ARRAY<VARCHAR>,
+    preferences MAP<VARCHAR, VARCHAR>
+);
+
+INSERT INTO memory.tiny.complex_types_table (id, user_info, interests, preferences) VALUES
+(1,
+ ROW('Alice', 30, ROW('New York', '10001')),
+ ARRAY['reading', 'music'],
+ MAP(ARRAY['theme', 'language'], ARRAY['dark', 'en'])
+),
+(2,
+ ROW('Bob', 25, ROW('London', 'SW1A 1AA')),
+ ARRAY['sports', 'coding'],
+ MAP(ARRAY['theme', 'language'], ARRAY['light', 'fr'])
+);
+
+set session pushdown_subfields_enabled=true;
+SELECT
+    id,
+    user_info.name,
+    user_info.address.city,
+    interests[1] AS first_interest,
+    preferences['theme'] AS theme
+FROM memory.tiny.complex_types_table;
